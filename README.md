@@ -87,4 +87,4 @@ DesChat es un proyecto personal de exploración técnica y portafolio. La implem
 
 ---
 
-maneGOW
+Made with ❤️ by MrNullPointer
