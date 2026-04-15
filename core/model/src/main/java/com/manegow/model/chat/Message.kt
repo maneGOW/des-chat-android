@@ -1,5 +1,7 @@
 package com.manegow.model.chat
 
+import com.manegow.model.common.DeliveryState
+import com.manegow.model.common.Timestamp
 import com.manegow.model.identity.UserId
 
 data class Message(
@@ -8,7 +10,8 @@ data class Message(
     val senderId: UserId,
     val type: MessageType,
     val body: String,
-    val createdAtEpochMillis: Long,
+    val createdAtEpochMillis: Timestamp,
+    val deliveryState: DeliveryState,
     val status: MessageStatus,
     val isEncrypted: Boolean
 ) {

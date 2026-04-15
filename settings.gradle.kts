@@ -54,3 +54,4 @@ project(":feature-chat-detail").projectDir = file("feature/chat-detail")
 
 include(":feature-settings")
 project(":feature-settings").projectDir = file("feature/settings")
+include(":data")
