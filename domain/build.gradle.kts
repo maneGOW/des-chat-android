@@ -7,5 +7,11 @@ kotlin {
 }
 
 dependencies {
+    implementation(project(":core-model"))
+    implementation(libs.kotlinx.coroutines.core)
     testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
