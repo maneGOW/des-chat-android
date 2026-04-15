@@ -51,6 +51,10 @@ class MainActivity : ComponentActivity() {
         SendMessageUseCase(chatRepository)
     }
 
+    private val localUserId by lazy {
+        UserId("local-user-id")
+    }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,12 +66,10 @@ class MainActivity : ComponentActivity() {
             DesChatTheme {
                 AppNavHost(
                     nearbyViewModel = nearbyViewModel,
-                    chatDetailViewModelFactory = { peerId, peerName ->
-                        provideChatDetailViewModel(
-                            peerId = peerId,
-                            peerName = peerName
-                        )
-                    }
+                    localUserId = localUserId,
+                    getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
+                    observeChatMessagesUseCase = observeChatMessagesUseCase,
+                    sendMessageUseCase = sendMessageUseCase
                 )
             }
         }
@@ -80,16 +82,6 @@ class MainActivity : ComponentActivity() {
         )[NearbyViewModel::class.java]
     }
 
-    private fun provideChatDetailViewModel(
-        peerId: String,
-        peerName: String?
-    ): ChatDetailViewModel {
-        return ViewModelProvider(
-            this,
-            chatDetailViewModelFactory(peerId, peerName)
-        )[ChatDetailViewModel::class.java]
-    }
-
     private fun nearbyViewModelFactory(): ViewModelProvider.Factory {
         return object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -99,28 +91,6 @@ class MainActivity : ComponentActivity() {
                         observeNearbyPeersUseCase = observeNearbyPeersUseCase,
                         startPeerDiscoveryUseCase = startPeerDiscoveryUseCase,
                         stopPeerDiscoveryUseCase = stopPeerDiscoveryUseCase
-                    ) as T
-                }
-                throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
-            }
-        }
-    }
-
-    private fun chatDetailViewModelFactory(
-        peerId: String,
-        peerName: String?
-    ): ViewModelProvider.Factory {
-        return object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                if (modelClass.isAssignableFrom(ChatDetailViewModel::class.java)) {
-                    return ChatDetailViewModel(
-                        localUserId = UserId("local-user-id"),
-                        peerUserId = UserId(peerId),
-                        peerDisplayName = peerName?.let(::DisplayName),
-                        getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
-                        observeChatMessagesUseCase = observeChatMessagesUseCase,
-                        sendMessageUseCase = sendMessageUseCase
                     ) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
