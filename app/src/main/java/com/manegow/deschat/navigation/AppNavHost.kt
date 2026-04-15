@@ -1,6 +1,10 @@
 package com.manegow.deschat.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -8,9 +12,13 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.manegow.chat_detail.ChatDetailRoute
 import com.manegow.chat_detail.ChatDetailViewModel
+import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
+import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
+import com.manegow.domain.usecase.chat.SendMessageUseCase
+import com.manegow.model.identity.DisplayName
+import com.manegow.model.identity.UserId
 import com.manegow.nearby.NearbyRoute
 import com.manegow.nearby.NearbyViewModel
-
 
 private const val NEARBY_ROUTE = "nearby"
 private const val CHAT_DETAIL_ROUTE = "chat_detail"
@@ -20,7 +28,10 @@ private const val ARG_PEER_NAME = "peerName"
 @Composable
 fun AppNavHost(
     nearbyViewModel: NearbyViewModel,
-    chatDetailViewModelFactory: (peerUserId: String, peerName: String?) -> ChatDetailViewModel
+    localUserId: UserId,
+    getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
+    observeChatMessagesUseCase: ObserveChatMessagesUseCase,
+    sendMessageUseCase: SendMessageUseCase,
 ) {
     val navController = rememberNavController()
 
@@ -64,13 +75,22 @@ fun AppNavHost(
                 ?.getString(ARG_PEER_NAME)
                 ?.takeIf { it.isNotBlank() }
 
-            val viewModel = chatDetailViewModelFactory(
-                peerId,
-                peerName
+            val chatDetailViewModel: ChatDetailViewModel = viewModel(
+                viewModelStoreOwner = backStackEntry,
+                key = "chat-detail-$peerId",
+                factory = chatDetailViewModelFactory(
+                    localUserId = localUserId,
+                    peerId = peerId,
+                    peerName = peerName,
+                    getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
+                    observeChatMessagesUseCase = observeChatMessagesUseCase,
+                    sendMessageUseCase = sendMessageUseCase
+                )
             )
 
+
             ChatDetailRoute(
-                viewModel = viewModel,
+                viewModel = chatDetailViewModel,
                 onBackClick = { navController.popBackStack() }
             )
         }
@@ -81,6 +101,32 @@ private fun buildChatDetailRoute(
     peerId: String,
     peerName: String?
 ): String {
-    val encodedName = java.net.URLEncoder.encode(peerName.orEmpty(), "UTF-8")
+    val encodedName = Uri.encode(peerName.orEmpty(), "UTF-8")
     return "$CHAT_DETAIL_ROUTE/$peerId?$ARG_PEER_NAME=$encodedName"
+}
+
+private fun chatDetailViewModelFactory(
+    localUserId: UserId,
+    peerId: String,
+    peerName: String?,
+    getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
+    observeChatMessagesUseCase: ObserveChatMessagesUseCase,
+    sendMessageUseCase: SendMessageUseCase
+): ViewModelProvider.Factory {
+    return object : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(ChatDetailViewModel::class.java)) {
+                return ChatDetailViewModel(
+                    localUserId = localUserId,
+                    peerUserId = UserId(peerId),
+                    peerDisplayName = peerName?.let(::DisplayName),
+                    getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
+                    observeChatMessagesUseCase = observeChatMessagesUseCase,
+                    sendMessageUseCase = sendMessageUseCase
+                ) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+        }
+    }
 }
