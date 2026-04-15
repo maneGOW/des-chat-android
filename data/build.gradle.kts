@@ -7,7 +7,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core-model"))
+    api(project(":domain"))
     implementation(libs.kotlinx.coroutines.core)
     testImplementation(kotlin("test"))
 }
