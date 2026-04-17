@@ -1,31 +1,45 @@
 package com.manegow.deschat
 
+import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.manegow.data.repository.FakeChatRepository
+import com.manegow.data.repository.RealMeshRepository
 import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
-import com.manegow.chat_detail.ChatDetailViewModel
-import com.manegow.data.repository.FakeChatRepository
-import com.manegow.data.repository.FakeMeshRepository
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
 import com.manegow.domain.usecase.mesh.ObserveNearbyPeersUseCase
 import com.manegow.domain.usecase.mesh.StartPeerDiscoveryUseCase
 import com.manegow.domain.usecase.mesh.StopPeerDiscoveryUseCase
-import com.manegow.model.identity.DisplayName
 import com.manegow.model.identity.UserId
 import com.manegow.nearby.NearbyViewModel
-import kotlin.getValue
 
 class MainActivity : ComponentActivity() {
 
-    private val meshRepository by lazy { FakeMeshRepository() }
+    private val meshRepository by lazy { RealMeshRepository(applicationContext) }
+
     private val chatRepository by lazy { FakeChatRepository() }
+
+    private val bluetoothManager by lazy {
+        getSystemService(BluetoothManager::class.java)
+    }
+
+    private val bluetoothAdapter: BluetoothAdapter?
+        get() = bluetoothManager?.adapter
 
     private val observeNearbyPeersUseCase by lazy {
         ObserveNearbyPeersUseCase(meshRepository)
@@ -55,6 +69,27 @@ class MainActivity : ComponentActivity() {
         UserId("local-user-id")
     }
 
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.all { it }
+        if (granted) {
+            ensureBluetoothEnabled()
+        }
+    }
+
+    private val enableBluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        when (result.resultCode) {
+            RESULT_OK -> {
+                recreate()
+            }
+            RESULT_CANCELED -> {
+                Log.d("MainActivity", "Bluetooth enable cancelled")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +97,14 @@ class MainActivity : ComponentActivity() {
 
         val nearbyViewModel = provideNearbyViewModel()
 
+        when {
+            !hasRequiredPermissions() -> {
+                permissionLauncher.launch(requiredPermissions())
+            }
+            else -> {
+                ensureBluetoothEnabled()
+            }
+        }
         setContent {
             DesChatTheme {
                 AppNavHost(
@@ -74,6 +117,44 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun hasRequiredPermissions(): Boolean {
+        return requiredPermissions().all { permission ->
+            ContextCompat.checkSelfPermission(this, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun ensureBluetoothEnabled() {
+        val adapter = bluetoothAdapter ?: return
+        if(adapter.isEnabled) return
+
+        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val hasConnectPermissions = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if(!hasConnectPermissions) return
+        }
+
+        val enableBluetoothIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+        enableBluetoothLauncher.launch(enableBluetoothIntent)
+    }
+
+    private fun requiredPermissions(): Array<String> {
+        return if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+        }
+    }
+
 
     private fun provideNearbyViewModel(): NearbyViewModel {
         return ViewModelProvider(

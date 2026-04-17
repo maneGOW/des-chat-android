@@ -1,17 +1,26 @@
 plugins {
-    id("org.jetbrains.kotlin.jvm")
+    id("com.android.library")
 }
 
-kotlin {
-    jvmToolchain(17)
+android {
+    namespace = "com.manegow.data"
+    compileSdk = 37
+
+    defaultConfig {
+        minSdk = 26
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
 }
 
 dependencies {
     api(project(":domain"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.androidx.bluetooth)
     testImplementation(kotlin("test"))
-}
-
-tasks.test {
-    useJUnitPlatform()
 }

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.manegow.domain.usecase.mesh.ObserveNearbyPeersUseCase
 import com.manegow.domain.usecase.mesh.StartPeerDiscoveryUseCase
 import com.manegow.domain.usecase.mesh.StopPeerDiscoveryUseCase
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,29 +15,38 @@ class NearbyViewModel(
     private val observeNearbyPeersUseCase: ObserveNearbyPeersUseCase,
     private val startPeerDiscoveryUseCase: StartPeerDiscoveryUseCase,
     private val stopPeerDiscoveryUseCase: StopPeerDiscoveryUseCase
-): ViewModel() {
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NearbyUiState(isLoading = true))
     val uiState: StateFlow<NearbyUiState> = _uiState.asStateFlow()
 
+    private var observeJob: Job? = null
+
     init {
         observePeers()
-        startDiscovery()
     }
 
     private fun observePeers() {
-        viewModelScope.launch {
+        if (observeJob != null) return
+
+        observeJob = viewModelScope.launch {
             observeNearbyPeersUseCase().collect { peers ->
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     nearbyPeers = peers,
-                    error = null)
+                    error = null
+                )
             }
         }
     }
 
-    private fun startDiscovery() {
+    fun startDiscovery() {
         viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                error = null
+            )
+
             runCatching {
                 startPeerDiscoveryUseCase()
             }.onFailure { throwable ->
@@ -48,18 +58,20 @@ class NearbyViewModel(
         }
     }
 
+    fun stopDiscovery() {
+        viewModelScope.launch {
+            runCatching {
+                stopPeerDiscoveryUseCase()
+            }
+        }
+    }
+
     fun retry() {
-        _uiState.value = _uiState.value.copy(
-            isLoading = true,
-            error = null
-        )
+        stopDiscovery()
         startDiscovery()
     }
 
     override fun onCleared() {
-        viewModelScope.launch {
-            stopPeerDiscoveryUseCase()
-        }
         super.onCleared()
     }
 }

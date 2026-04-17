@@ -12,6 +12,7 @@ composeBom = "2026.02.01"
 appcompat = "1.6.1"
 material = "1.10.0"
 navigationCompose = "2.9.7"
+bluetooth = "1.0.0-alpha02"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -32,6 +33,7 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutinesCore" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+androidx-bluetooth = { group = "androidx.bluetooth", name = "bluetooth", version.ref = "bluetooth" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
