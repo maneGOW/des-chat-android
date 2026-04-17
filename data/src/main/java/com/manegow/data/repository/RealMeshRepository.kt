@@ -3,7 +3,15 @@ package com.manegow.data.repository
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattServer
+import android.bluetooth.BluetoothGattServerCallback
+import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
@@ -20,6 +28,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.repository.MeshRepository
 import com.manegow.model.common.Timestamp
 import com.manegow.model.identity.DeviceId
@@ -34,7 +43,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -42,7 +53,8 @@ import java.util.UUID
 
 @SuppressLint("HardwareIds")
 class RealMeshRepository(
-    private val context: Context
+    private val context: Context,
+    private val identityRepository: IdentityRepository
 ) : MeshRepository {
 
     companion object {
@@ -56,6 +68,9 @@ class RealMeshRepository(
 
         private val SERVICE_UUID: UUID =
             UUID.fromString("12345678-1234-1234-1234-1234567890AB")
+            
+        private val MESSAGE_CHARACTERISTIC_UUID: UUID =
+            UUID.fromString("12345678-1234-1234-1234-1234567890AC")
     }
 
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -72,7 +87,11 @@ class RealMeshRepository(
     private val advertiser: BluetoothLeAdvertiser?
         get() = bluetoothAdapter?.bluetoothLeAdvertiser
 
+    private var gattServer: BluetoothGattServer? = null
+    private val connectedDevices = mutableMapOf<String, BluetoothGatt>()
+
     private val peersState = MutableStateFlow<List<Peer>>(emptyList())
+    private val incomingDataState = MutableSharedFlow<Pair<String, ByteArray>>(extraBufferCapacity = 64)
     private val lastSeenMap = mutableMapOf<String, Long>()
 
     private var cleanupJob: Job? = null
@@ -95,6 +114,8 @@ class RealMeshRepository(
 
     override fun observeNearbyPeers(): Flow<List<Peer>> = peersState.asStateFlow()
 
+    override fun observeIncomingData(): Flow<Pair<String, ByteArray>> = incomingDataState.asSharedFlow()
+
     @SuppressLint("MissingPermission")
     override suspend fun startDiscovery() {
         Log.d(
@@ -108,6 +129,7 @@ class RealMeshRepository(
             return
         }
 
+        startGattServer()
         startAdvertisingInternal()
         startScanningInternal()
         startCleanupLoop()
@@ -118,8 +140,121 @@ class RealMeshRepository(
         stopScanningInternal()
         stopAdvertisingInternal()
         stopCleanupLoop()
+        stopGattServer()
         peersState.value = emptyList()
         lastSeenMap.clear()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startGattServer() {
+        if (gattServer != null) return
+
+        val serverCallback = object : BluetoothGattServerCallback() {
+            override fun onCharacteristicWriteRequest(
+                device: BluetoothDevice?,
+                requestId: Int,
+                characteristic: BluetoothGattCharacteristic?,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray?
+            ) {
+                if (characteristic?.uuid == MESSAGE_CHARACTERISTIC_UUID) {
+                    value?.let { 
+                        Log.d(TAG, "Received data from ${device?.address}: ${it.size} bytes")
+                        device?.address?.let { address ->
+                            repositoryScope.launch {
+                                incomingDataState.emit(address to it)
+                            }
+                        }
+                    }
+                    if (responseNeeded && device != null) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+                    }
+                }
+            }
+        }
+
+        gattServer = bluetoothManager?.openGattServer(context, serverCallback)
+        
+        val service = BluetoothGattService(
+            SERVICE_UUID,
+            BluetoothGattService.SERVICE_TYPE_PRIMARY
+        )
+
+        val characteristic = BluetoothGattCharacteristic(
+            MESSAGE_CHARACTERISTIC_UUID,
+            BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE
+        )
+
+        service.addCharacteristic(characteristic)
+        gattServer?.addService(service)
+        Log.d(TAG, "GATT Server started and service added")
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopGattServer() {
+        gattServer?.close()
+        gattServer = null
+        connectedDevices.values.forEach { it.close() }
+        connectedDevices.clear()
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun sendData(deviceId: String, data: ByteArray) {
+        val device = bluetoothAdapter?.getRemoteDevice(deviceId) ?: return
+        
+        val gattCallback = object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    Log.d(TAG, "Connected to GATT server on $deviceId, requesting MTU...")
+                    gatt?.requestMtu(512)
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    Log.d(TAG, "Disconnected from $deviceId")
+                    gatt?.close()
+                    connectedDevices.remove(deviceId)
+                }
+            }
+
+            override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
+                Log.d(TAG, "MTU changed to $mtu for $deviceId, discovering services...")
+                gatt?.discoverServices()
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    val service = gatt?.getService(SERVICE_UUID)
+                    val characteristic = service?.getCharacteristic(MESSAGE_CHARACTERISTIC_UUID)
+                    
+                    if (characteristic != null) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            gatt.writeCharacteristic(characteristic, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            characteristic.value = data
+                            @Suppress("DEPRECATION")
+                            gatt.writeCharacteristic(characteristic)
+                        }
+                        Log.d(TAG, "Data sent to $deviceId")
+                    }
+                }
+            }
+
+            override fun onCharacteristicWrite(
+                gatt: BluetoothGatt?,
+                characteristic: BluetoothGattCharacteristic?,
+                status: Int
+            ) {
+                Log.d(TAG, "Write completed on $deviceId with status $status")
+                gatt?.disconnect()
+            }
+        }
+
+        val connectGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        if (connectGatt != null) {
+            connectedDevices[deviceId] = connectGatt
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -130,13 +265,19 @@ class RealMeshRepository(
             return
         }
 
-        val scanSettings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+        val scanFilter = ScanFilter.Builder()
+            .setServiceData(ParcelUuid(SERVICE_UUID), null)
             .build()
 
-        scanner?.startScan(null, scanSettings, scanCallback)
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+            .setMatchMode(ScanSettings.MATCH_MODE_STICKY)
+            .build()
+
+        scanner?.startScan(listOf(scanFilter), scanSettings, scanCallback)
         isScanning = true
-        Log.d(TAG, "BLE scan started without filters")
+        Log.d(TAG, "BLE scan started with service filter")
     }
 
     @SuppressLint("MissingPermission")
@@ -169,13 +310,11 @@ class RealMeshRepository(
         }
 
         val serviceUuid = ParcelUuid(SERVICE_UUID)
-        val payload = buildAdvertisePayload(
-            userId = localUserId,
-        )
+        val payload = buildAdvertisePayload(userId = localUserId)
 
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .setConnectable(false)
             .build()
 
@@ -283,6 +422,12 @@ class RealMeshRepository(
             val current = peersState.value
             val existingPeer = current.firstOrNull { it.deviceId == peer.deviceId }
 
+            if (existingPeer != null && 
+                Math.abs(existingPeer.signalStrength.rssi - peer.signalStrength.rssi) < 5 &&
+                existingPeer.status == PeerStatus.REACHABLE) {
+                return
+            }
+
             val updatedPeer = when {
                 existingPeer == null -> {
                     peer.copy(status = PeerStatus.DISCOVERED)
@@ -349,17 +494,23 @@ class RealMeshRepository(
         )
     }
 
-    private fun buildAdvertisePayload(
-        userId: String,
-    ): ByteArray {
+    private fun buildAdvertisePayload(userId: String): ByteArray {
         return userId.trim().take(8).toByteArray(Charsets.UTF_8)
     }
 
     private fun parseAdvertisePayload(data: ByteArray?): String? {
-        return data
-            ?.toString(Charsets.UTF_8)
-            ?.trim()
-            ?.ifBlank { null }
+        return data?.toString(Charsets.UTF_8)?.trim()?.ifBlank { null }
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
     }
 
     private fun timestampFromScanResult(result: ScanResult): Timestamp {

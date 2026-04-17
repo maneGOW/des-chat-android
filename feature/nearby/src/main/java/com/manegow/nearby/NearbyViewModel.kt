@@ -49,6 +49,8 @@ class NearbyViewModel(
 
             runCatching {
                 startPeerDiscoveryUseCase()
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(isLoading = false)
             }.onFailure { throwable ->
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,

@@ -22,6 +22,10 @@ class FakeMeshRepository: MeshRepository {
         return peersState.asStateFlow()
     }
 
+    override fun observeIncomingData(): Flow<Pair<String, ByteArray>> {
+        TODO("Not yet implemented")
+    }
+
     override suspend fun startDiscovery() {
         discoveryStarted = true
         peersState.value = listOf(
@@ -55,5 +59,9 @@ class FakeMeshRepository: MeshRepository {
     override suspend fun stopDiscovery() {
         discoveryStarted = false
         peersState.value = emptyList()
+    }
+
+    override suspend fun sendData(deviceId: String, data: ByteArray) {
+        TODO("Not yet implemented")
     }
 }
