@@ -16,11 +16,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.manegow.data.repository.DataStoreIdentityRepository
-import com.manegow.data.repository.FakeChatRepository
+import com.manegow.data.repository.RealChatRepository
 import com.manegow.data.repository.RealMeshRepository
 import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
-import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
@@ -32,9 +31,9 @@ import com.manegow.nearby.NearbyViewModel
 
 class MainActivity : ComponentActivity() {
 
-    private val meshRepository by lazy { RealMeshRepository(applicationContext) }
+    private val meshRepository by lazy { RealMeshRepository(applicationContext, identityRepository) }
 
-    private val chatRepository by lazy { FakeChatRepository() }
+    private val chatRepository by lazy { RealChatRepository(meshRepository) }
 
     private val identityRepository by lazy { DataStoreIdentityRepository(applicationContext) }
 
@@ -67,10 +66,6 @@ class MainActivity : ComponentActivity() {
 
     private val sendMessageUseCase by lazy {
         SendMessageUseCase(chatRepository)
-    }
-
-    private val localUserId by lazy {
-        UserId("local-user-id")
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -114,7 +109,6 @@ class MainActivity : ComponentActivity() {
                 AppNavHost(
                     nearbyViewModel = nearbyViewModel,
                     identityRepository = identityRepository,
-                    localUserId = localUserId,
                     getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
                     observeChatMessagesUseCase = observeChatMessagesUseCase,
                     sendMessageUseCase = sendMessageUseCase

@@ -19,6 +19,8 @@ import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.model.identity.DisplayName
+import androidx.compose.runtime.collectAsState
+import com.manegow.model.identity.UserIdentity
 import com.manegow.model.identity.UserId
 import com.manegow.nearby.NearbyRoute
 import com.manegow.nearby.NearbyViewModel
@@ -34,25 +36,30 @@ private const val ARG_PEER_NAME = "peerName"
 fun AppNavHost(
     nearbyViewModel: NearbyViewModel,
     identityRepository: IdentityRepository,
-    localUserId: UserId,
     getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
     observeChatMessagesUseCase: ObserveChatMessagesUseCase,
     sendMessageUseCase: SendMessageUseCase,
 ) {
     val navController = rememberNavController()
 
-    val isUserRegistered by produceState<Boolean?>(initialValue = null) {
-        value = identityRepository.isUserRegistered()
-    }
+    val userIdentity by identityRepository.getUserIdentity().collectAsState(initial = null)
 
-    if (isUserRegistered == null) {
-        // Pantalla de carga o splash mientras verificamos el estado
+    if (userIdentity == null) {
+        // Pantalla de carga o registro
+        OnboardingRoute(
+            identityRepository = identityRepository,
+            onFinished = {
+                // El collectAsState detectará el cambio automáticamente
+            }
+        )
         return
     }
 
+    val localUserId = userIdentity!!.userId
+
     NavHost(
         navController = navController,
-        startDestination = if (isUserRegistered == true) NEARBY_ROUTE else ONBOARDING_ROUTE
+        startDestination = NEARBY_ROUTE
     ) {
         composable(route = ONBOARDING_ROUTE) {
             OnboardingRoute(
