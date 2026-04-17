@@ -22,5 +22,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.bluetooth)
+    implementation(libs.androidx.datastore.preferences)
     testImplementation(kotlin("test"))
 }
