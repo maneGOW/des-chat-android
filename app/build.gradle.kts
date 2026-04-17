@@ -41,6 +41,7 @@ dependencies {
 
     implementation(project(":feature-chat-detail"))
     implementation(project(":feature-nearby"))
+    implementation(project(":feature-onboarding"))
     implementation(project(":domain"))
     implementation(project(":data"))
 

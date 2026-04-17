@@ -15,10 +15,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.manegow.data.repository.DataStoreIdentityRepository
 import com.manegow.data.repository.FakeChatRepository
 import com.manegow.data.repository.RealMeshRepository
 import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
+import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
@@ -33,6 +35,8 @@ class MainActivity : ComponentActivity() {
     private val meshRepository by lazy { RealMeshRepository(applicationContext) }
 
     private val chatRepository by lazy { FakeChatRepository() }
+
+    private val identityRepository by lazy { DataStoreIdentityRepository(applicationContext) }
 
     private val bluetoothManager by lazy {
         getSystemService(BluetoothManager::class.java)
@@ -109,6 +113,7 @@ class MainActivity : ComponentActivity() {
             DesChatTheme {
                 AppNavHost(
                     nearbyViewModel = nearbyViewModel,
+                    identityRepository = identityRepository,
                     localUserId = localUserId,
                     getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
                     observeChatMessagesUseCase = observeChatMessagesUseCase,

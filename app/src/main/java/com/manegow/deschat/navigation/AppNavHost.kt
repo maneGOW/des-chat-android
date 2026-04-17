@@ -2,6 +2,8 @@ package com.manegow.deschat.navigation
 
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -15,11 +17,14 @@ import com.manegow.chat_detail.ChatDetailViewModel
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
+import com.manegow.domain.repository.IdentityRepository
 import com.manegow.model.identity.DisplayName
 import com.manegow.model.identity.UserId
 import com.manegow.nearby.NearbyRoute
 import com.manegow.nearby.NearbyViewModel
+import com.manegow.onboarding.OnboardingRoute
 
+private const val ONBOARDING_ROUTE = "onboarding"
 private const val NEARBY_ROUTE = "nearby"
 private const val CHAT_DETAIL_ROUTE = "chat_detail"
 private const val ARG_PEER_ID = "peerId"
@@ -28,6 +33,7 @@ private const val ARG_PEER_NAME = "peerName"
 @Composable
 fun AppNavHost(
     nearbyViewModel: NearbyViewModel,
+    identityRepository: IdentityRepository,
     localUserId: UserId,
     getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
     observeChatMessagesUseCase: ObserveChatMessagesUseCase,
@@ -35,10 +41,30 @@ fun AppNavHost(
 ) {
     val navController = rememberNavController()
 
+    val isUserRegistered by produceState<Boolean?>(initialValue = null) {
+        value = identityRepository.isUserRegistered()
+    }
+
+    if (isUserRegistered == null) {
+        // Pantalla de carga o splash mientras verificamos el estado
+        return
+    }
+
     NavHost(
         navController = navController,
-        startDestination = NEARBY_ROUTE
+        startDestination = if (isUserRegistered == true) NEARBY_ROUTE else ONBOARDING_ROUTE
     ) {
+        composable(route = ONBOARDING_ROUTE) {
+            OnboardingRoute(
+                identityRepository = identityRepository,
+                onFinished = {
+                    navController.navigate(NEARBY_ROUTE) {
+                        popUpTo(ONBOARDING_ROUTE) { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable(route = NEARBY_ROUTE) {
             NearbyRoute(
                 viewModel = nearbyViewModel,
