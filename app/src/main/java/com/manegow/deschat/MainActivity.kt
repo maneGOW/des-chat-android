@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.manegow.data.db.AppDatabase
 import com.manegow.data.repository.DataStoreIdentityRepository
 import com.manegow.data.repository.RealChatRepository
 import com.manegow.data.repository.RealMeshRepository
@@ -33,7 +34,15 @@ class MainActivity : ComponentActivity() {
 
     private val meshRepository by lazy { RealMeshRepository(applicationContext, identityRepository) }
 
-    private val chatRepository by lazy { RealChatRepository(meshRepository) }
+    private val database by lazy { AppDatabase.getDatabase(applicationContext) }
+
+    private val chatRepository by lazy { 
+        RealChatRepository(
+            meshRepository = meshRepository,
+            chatDao = database.chatDao(),
+            messageDao = database.messageDao()
+        ) 
+    }
 
     private val identityRepository by lazy { DataStoreIdentityRepository(applicationContext) }
 
@@ -113,6 +122,7 @@ class MainActivity : ComponentActivity() {
                 AppNavHost(
                     nearbyViewModel = nearbyViewModel,
                     identityRepository = identityRepository,
+                    chatRepository = chatRepository,
                     getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
                     observeChatMessagesUseCase = observeChatMessagesUseCase,
                     observeChatsUseCase = observeChatsUseCase,

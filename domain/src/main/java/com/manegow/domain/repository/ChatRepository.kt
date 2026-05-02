@@ -21,4 +21,6 @@ interface ChatRepository {
         senderId: UserId,
         text: String
     )
+
+    suspend fun clearAllData()
 }
