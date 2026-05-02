@@ -3,10 +3,12 @@ package com.manegow.data.repository
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.manegow.domain.repository.IdentityRepository
+import com.manegow.domain.repository.UserSettings
 import com.manegow.model.identity.DeviceId
 import com.manegow.model.identity.DisplayName
 import com.manegow.model.identity.UserId
@@ -24,6 +26,27 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
         val DEVICE_ID = stringPreferencesKey("device_id")
         val USER_ID = stringPreferencesKey("user_id")
         val DISPLAY_NAME = stringPreferencesKey("display_name")
+        val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
+        val SOUNDS_ENABLED = booleanPreferencesKey("sounds_enabled")
+        val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
+    }
+
+    override fun observeSettings(): Flow<UserSettings> {
+        return context.dataStore.data.map { preferences ->
+            UserSettings(
+                notificationsEnabled = preferences[PreferencesKeys.NOTIFICATIONS_ENABLED] ?: true,
+                soundsEnabled = preferences[PreferencesKeys.SOUNDS_ENABLED] ?: true,
+                vibrationEnabled = preferences[PreferencesKeys.VIBRATION_ENABLED] ?: true
+            )
+        }
+    }
+
+    override suspend fun updateSettings(settings: UserSettings) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.NOTIFICATIONS_ENABLED] = settings.notificationsEnabled
+            preferences[PreferencesKeys.SOUNDS_ENABLED] = settings.soundsEnabled
+            preferences[PreferencesKeys.VIBRATION_ENABLED] = settings.vibrationEnabled
+        }
     }
 
     override fun getUserIdentity(): Flow<UserIdentity?> {
@@ -58,5 +81,11 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
     override suspend fun isUserRegistered(): Boolean {
         val preferences = context.dataStore.data.first()
         return preferences[PreferencesKeys.DISPLAY_NAME] != null
+    }
+
+    override suspend fun clearAllData() {
+        context.dataStore.edit { preferences ->
+            preferences.clear()
+        }
     }
 }

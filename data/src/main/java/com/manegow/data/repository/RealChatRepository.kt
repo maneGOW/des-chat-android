@@ -33,11 +33,25 @@ class RealChatRepository(
     private val messagesState = MutableStateFlow<Map<ChatId, List<Message>>>(emptyMap())
     private val chatsState = MutableStateFlow<List<Chat>>(emptyList())
 
+    // Mapa para traducir UserId -> DeviceId (MAC)
+    private val userIdToDeviceIdMap = mutableMapOf<String, String>()
+
     init {
         // Escuchar mensajes entrantes por Bluetooth
         repositoryScope.launch {
             meshRepository.observeIncomingData().collect { (deviceId, data) ->
                 handleIncomingRawData(deviceId, data)
+            }
+        }
+
+        // Observar pares cercanos para mapear UserId a DeviceId
+        repositoryScope.launch {
+            meshRepository.observeNearbyPeers().collect { peers ->
+                peers.forEach { peer ->
+                    peer.userId?.let { userId ->
+                        userIdToDeviceIdMap[userId.value] = peer.deviceId.value
+                    }
+                }
             }
         }
     }
@@ -91,14 +105,23 @@ class RealChatRepository(
         messagesState.value = messagesState.value + (chatId to (currentMessages + message))
 
         // 2. Enviar por Bluetooth
-        // Para simplificar, asumimos que el chatId en chats directos es el deviceId o userId
         repositoryScope.launch {
             try {
-                val payload = encodeMessagePayload(message)
-                meshRepository.sendData(chatId.value, payload)
+                // Buscamos la dirección MAC (DeviceId) asociada a este UserId (chatId)
+                // Usamos la misma lógica de truncación que en el descubrimiento (10 chars)
+                val targetUserId = chatId.value.take(10)
+                val targetDeviceId = userIdToDeviceIdMap[targetUserId]
                 
-                // Actualizar estado a enviado si meshRepository no lanza excepción
-                updateMessageDeliveryState(chatId, message.messageId, DeliveryState.DELIVERED)
+                if (targetDeviceId != null) {
+                    val payload = encodeMessagePayload(message)
+                    meshRepository.sendData(targetDeviceId, payload)
+                    
+                    // Actualizar estado a enviado
+                    updateMessageDeliveryState(chatId, message.messageId, DeliveryState.DELIVERED)
+                } else {
+                    // Si no tenemos el DeviceId, el par no está al alcance o no se ha descubierto aún
+                    updateMessageDeliveryState(chatId, message.messageId, DeliveryState.FAILED)
+                }
             } catch (e: Exception) {
                 updateMessageDeliveryState(chatId, message.messageId, DeliveryState.FAILED)
             }
