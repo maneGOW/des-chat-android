@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 
 interface ChatRepository {
     fun observeMessages(chatId: ChatId): Flow<List<Message>>
+    fun observeChats(): Flow<List<Chat>>
 
     suspend fun getOrCreateDirectChat(
         peerUserId: UserId,

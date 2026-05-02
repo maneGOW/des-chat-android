@@ -26,7 +26,7 @@ data class SettingsUiState(
     val nickname: String = "",
     val settings: UserSettings = UserSettings(),
     val isSaving: Boolean = false,
-    val showNicknameDialog: Boolean = false
+    val showNicknameDialog: Boolean = false,
 )
 
 class SettingsViewModel(
@@ -121,7 +121,7 @@ fun SettingsScreen(
                     title = "Nickname",
                     subtitle = uiState.nickname.ifBlank { "No configurado" },
                     icon = Icons.Default.Person,
-                    onClick = { viewModel.setShowNicknameDialog(true) }
+                    onClick = { viewModel.setShowNicknameDialog(show = true) }
                 )
             }
 

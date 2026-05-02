@@ -58,7 +58,7 @@ fun ChatDetailScreen(
     onBackClick: () -> Unit,
     onDraftChanged: (String) -> Unit,
     onSendClick: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -88,7 +88,7 @@ fun ChatDetailScreen(
             )
         },
         bottomBar = {
-            if (!uiState.isLoading && uiState.error == null) {
+            if (!uiState.isLoading && (uiState.error == null)) {
                 MessageInputBar(
                     value = uiState.draftMessage,
                     onValueChange = onDraftChanged,

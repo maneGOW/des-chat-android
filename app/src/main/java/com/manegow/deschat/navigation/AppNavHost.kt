@@ -1,7 +1,6 @@
 package com.manegow.deschat.navigation
 
 import android.net.Uri
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,9 +37,12 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.manegow.chat_detail.ChatDetailRoute
 import com.manegow.chat_detail.ChatDetailViewModel
+import com.manegow.chat_list.ChatListScreen
+import com.manegow.chat_list.ChatListViewModel
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
+import com.manegow.domain.usecase.chat.ObserveChatsUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
 import com.manegow.model.identity.DisplayName
 import com.manegow.model.identity.UserId
@@ -70,6 +72,7 @@ fun AppNavHost(
     identityRepository: IdentityRepository,
     getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
     observeChatMessagesUseCase: ObserveChatMessagesUseCase,
+    observeChatsUseCase: ObserveChatsUseCase,
     sendMessageUseCase: SendMessageUseCase,
 ) {
     val navController = rememberNavController()
@@ -78,12 +81,11 @@ fun AppNavHost(
 
     if (userIdentity == null) {
         // Pantalla de carga o registro
-        OnboardingRoute(
-            identityRepository = identityRepository,
-            onFinished = {
+            OnboardingRoute(
+                identityRepository = identityRepository
+            ) {
                 // El collectAsState detectará el cambio automáticamente
             }
-        )
         return
     }
 
@@ -132,13 +134,12 @@ fun AppNavHost(
         ) {
             composable(route = ONBOARDING_ROUTE) {
                 OnboardingRoute(
-                    identityRepository = identityRepository,
-                    onFinished = {
-                        navController.navigate(NEARBY_ROUTE) {
-                            popUpTo(ONBOARDING_ROUTE) { inclusive = true }
-                        }
+                    identityRepository = identityRepository
+                ) {
+                    navController.navigate(NEARBY_ROUTE) {
+                        popUpTo(ONBOARDING_ROUTE) { inclusive = true }
                     }
-                )
+                }
             }
 
             composable(route = NEARBY_ROUTE) {
@@ -156,7 +157,20 @@ fun AppNavHost(
             }
 
             composable(route = CHATS_ROUTE) {
-                ChatsPlaceholder()
+                val chatListViewModel: ChatListViewModel = viewModel(
+                    factory = chatListViewModelFactory(observeChatsUseCase)
+                )
+                ChatListScreen(
+                    viewModel = chatListViewModel,
+                    onChatClick = { chatId, name ->
+                        navController.navigate(
+                            route = buildChatDetailRoute(
+                                peerId = chatId.value,
+                                peerName = name
+                            )
+                        )
+                    }
+                )
             }
 
             composable(route = SETTINGS_ROUTE) {
@@ -216,26 +230,6 @@ fun AppNavHost(
     }
 }
 
-@Composable
-fun ChatsPlaceholder() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.Forum,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Tus chats aparecerán aquí",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
 private fun buildChatDetailRoute(
     peerId: String,
     peerName: String?
@@ -278,6 +272,20 @@ private fun settingsViewModelFactory(
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(SettingsViewModel::class.java)) {
                 return SettingsViewModel(identityRepository) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+        }
+    }
+}
+
+private fun chatListViewModelFactory(
+    observeChatsUseCase: ObserveChatsUseCase
+): ViewModelProvider.Factory {
+    return object : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(ChatListViewModel::class.java)) {
+                return ChatListViewModel(observeChatsUseCase) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
