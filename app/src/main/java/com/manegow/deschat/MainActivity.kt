@@ -22,11 +22,11 @@ import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
+import com.manegow.domain.usecase.chat.ObserveChatsUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
 import com.manegow.domain.usecase.mesh.ObserveNearbyPeersUseCase
 import com.manegow.domain.usecase.mesh.StartPeerDiscoveryUseCase
 import com.manegow.domain.usecase.mesh.StopPeerDiscoveryUseCase
-import com.manegow.model.identity.UserId
 import com.manegow.nearby.NearbyViewModel
 
 class MainActivity : ComponentActivity() {
@@ -62,6 +62,10 @@ class MainActivity : ComponentActivity() {
 
     private val observeChatMessagesUseCase by lazy {
         ObserveChatMessagesUseCase(chatRepository)
+    }
+
+    private val observeChatsUseCase by lazy {
+        ObserveChatsUseCase(chatRepository)
     }
 
     private val sendMessageUseCase by lazy {
@@ -111,6 +115,7 @@ class MainActivity : ComponentActivity() {
                     identityRepository = identityRepository,
                     getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
                     observeChatMessagesUseCase = observeChatMessagesUseCase,
+                    observeChatsUseCase = observeChatsUseCase,
                     sendMessageUseCase = sendMessageUseCase
                 )
             }
@@ -119,7 +124,7 @@ class MainActivity : ComponentActivity() {
 
     private fun hasRequiredPermissions(): Boolean {
         return requiredPermissions().all { permission ->
-            ContextCompat.checkSelfPermission(this, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
         }
     }
 

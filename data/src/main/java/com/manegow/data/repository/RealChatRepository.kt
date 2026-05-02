@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 class RealChatRepository(
-    private val meshRepository: MeshRepository
+    private val meshRepository: MeshRepository,
 ) : ChatRepository {
 
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -58,6 +58,10 @@ class RealChatRepository(
 
     override fun observeMessages(chatId: ChatId): Flow<List<Message>> {
         return messagesState.map { it[chatId].orEmpty() }
+    }
+
+    override fun observeChats(): Flow<List<Chat>> {
+        return chatsState.asStateFlow()
     }
 
     override suspend fun getOrCreateDirectChat(
@@ -103,6 +107,7 @@ class RealChatRepository(
         // 1. Guardar localmente
         val currentMessages = messagesState.value[chatId].orEmpty()
         messagesState.value = messagesState.value + (chatId to (currentMessages + message))
+        updateChatMetadata(chatId, text)
 
         // 2. Enviar por Bluetooth
         repositoryScope.launch {
@@ -122,7 +127,7 @@ class RealChatRepository(
                     // Si no tenemos el DeviceId, el par no está al alcance o no se ha descubierto aún
                     updateMessageDeliveryState(chatId, message.messageId, DeliveryState.FAILED)
                 }
-            } catch (e: Exception) {
+            } catch (ignored: Exception) {
                 updateMessageDeliveryState(chatId, message.messageId, DeliveryState.FAILED)
             }
         }
@@ -136,6 +141,12 @@ class RealChatRepository(
             val currentMessages = messagesState.value[chatId].orEmpty()
             if (currentMessages.none { it.messageId == message.messageId }) {
                 messagesState.value = messagesState.value + (chatId to (currentMessages + message))
+                
+                // Asegurar que el chat existe
+                repositoryScope.launch {
+                    getOrCreateDirectChat(message.senderId, null)
+                    updateChatMetadata(chatId, message.body)
+                }
             }
         } catch (e: Exception) {
             // Error al decodificar
@@ -150,6 +161,22 @@ class RealChatRepository(
         messagesState.value = messagesState.value + (chatId to updatedMessages)
     }
 
+    private fun updateChatMetadata(chatId: ChatId, lastMessage: String) {
+        val currentChats = chatsState.value
+        val updatedChats = currentChats.map { chat ->
+            if (chat.chatId == chatId) {
+                chat.copy(
+                    lastMessagePreview = lastMessage,
+                    updatedAtEpochMillis = Timestamp(System.currentTimeMillis())
+                )
+            } else {
+                chat
+            }
+        }.sortedByDescending { it.updatedAtEpochMillis.epochMillis }
+        
+        chatsState.value = updatedChats
+    }
+
     // --- Serialización Simple (Lite) ---
     // Formato: senderId|body|messageId
     private fun encodeMessagePayload(message: Message): ByteArray {
@@ -157,7 +184,7 @@ class RealChatRepository(
         return raw.toByteArray(Charsets.UTF_8)
     }
 
-    private fun decodeMessagePayload(deviceId: String, data: ByteArray): Message? {
+    private fun decodeMessagePayload(@Suppress("UNUSED_PARAMETER") deviceId: String, data: ByteArray): Message? {
         val raw = String(data, Charsets.UTF_8)
         val parts = raw.split("|")
         if (parts.size < 3) return null

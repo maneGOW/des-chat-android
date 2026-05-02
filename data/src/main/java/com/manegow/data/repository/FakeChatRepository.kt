@@ -28,6 +28,10 @@ class FakeChatRepository: ChatRepository {
         }
     }
 
+    override fun observeChats(): Flow<List<Chat>> {
+        TODO("Not yet implemented")
+    }
+
     override suspend fun getOrCreateDirectChat(
         peerUserId: UserId,
         peerDisplayName: DisplayName?
