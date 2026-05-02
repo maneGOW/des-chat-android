@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.manegow.domain.repository.ChatRepository
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.repository.UserSettings
 import com.manegow.model.identity.DisplayName
@@ -30,7 +31,8 @@ data class SettingsUiState(
 )
 
 class SettingsViewModel(
-    private val identityRepository: IdentityRepository
+    private val identityRepository: IdentityRepository,
+    private val chatRepository: ChatRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -83,6 +85,7 @@ class SettingsViewModel(
     fun deleteSession(onDeleted: () -> Unit) {
         viewModelScope.launch {
             identityRepository.clearAllData()
+            chatRepository.clearAllData()
             onDeleted()
         }
     }

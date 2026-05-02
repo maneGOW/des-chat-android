@@ -29,7 +29,7 @@ class FakeChatRepository: ChatRepository {
     }
 
     override fun observeChats(): Flow<List<Chat>> {
-        TODO("Not yet implemented")
+        return chatsState
     }
 
     override suspend fun getOrCreateDirectChat(
@@ -90,6 +90,11 @@ class FakeChatRepository: ChatRepository {
                 chat
             }
         }
+    }
+
+    override suspend fun clearAllData() {
+        chatsState.value = emptyList()
+        messagesState.value = emptyMap()
     }
 
     suspend fun seedChat(chatId: ChatId, messages: List<Message>) {

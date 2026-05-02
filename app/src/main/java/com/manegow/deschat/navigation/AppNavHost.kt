@@ -39,6 +39,7 @@ import com.manegow.chat_detail.ChatDetailRoute
 import com.manegow.chat_detail.ChatDetailViewModel
 import com.manegow.chat_list.ChatListScreen
 import com.manegow.chat_list.ChatListViewModel
+import com.manegow.domain.repository.ChatRepository
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
@@ -70,6 +71,7 @@ sealed class BottomNavItem(val route: String, val icon: ImageVector, val label: 
 fun AppNavHost(
     nearbyViewModel: NearbyViewModel,
     identityRepository: IdentityRepository,
+    chatRepository: ChatRepository,
     getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
     observeChatMessagesUseCase: ObserveChatMessagesUseCase,
     observeChatsUseCase: ObserveChatsUseCase,
@@ -175,7 +177,7 @@ fun AppNavHost(
 
             composable(route = SETTINGS_ROUTE) {
                 val settingsViewModel: SettingsViewModel = viewModel(
-                    factory = settingsViewModelFactory(identityRepository)
+                    factory = settingsViewModelFactory(identityRepository, chatRepository)
                 )
                 SettingsScreen(
                     viewModel = settingsViewModel,
@@ -265,13 +267,14 @@ private fun chatDetailViewModelFactory(
 }
 
 private fun settingsViewModelFactory(
-    identityRepository: IdentityRepository
+    identityRepository: IdentityRepository,
+    chatRepository: ChatRepository
 ): ViewModelProvider.Factory {
     return object : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(SettingsViewModel::class.java)) {
-                return SettingsViewModel(identityRepository) as T
+                return SettingsViewModel(identityRepository, chatRepository) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

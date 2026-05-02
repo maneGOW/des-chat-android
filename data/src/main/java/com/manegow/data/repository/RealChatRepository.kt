@@ -1,5 +1,9 @@
 package com.manegow.data.repository
 
+import com.manegow.data.db.dao.ChatDao
+import com.manegow.data.db.dao.MessageDao
+import com.manegow.data.db.entities.toDomain
+import com.manegow.data.db.entities.toEntity
 import com.manegow.domain.repository.ChatRepository
 import com.manegow.domain.repository.MeshRepository
 import com.manegow.model.chat.Chat
@@ -17,22 +21,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 class RealChatRepository(
     private val meshRepository: MeshRepository,
+    private val chatDao: ChatDao,
+    private val messageDao: MessageDao
 ) : ChatRepository {
 
-    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
-    // Almacenamiento en memoria para demostración (debería ser una DB en el futuro)
-    private val messagesState = MutableStateFlow<Map<ChatId, List<Message>>>(emptyMap())
-    private val chatsState = MutableStateFlow<List<Chat>>(emptyList())
-
     // Mapa para traducir UserId -> DeviceId (MAC)
     private val userIdToDeviceIdMap = mutableMapOf<String, String>()
 
@@ -57,25 +57,28 @@ class RealChatRepository(
     }
 
     override fun observeMessages(chatId: ChatId): Flow<List<Message>> {
-        return messagesState.map { it[chatId].orEmpty() }
+        return messageDao.observeMessages(chatId.value).map { entities ->
+            entities.map { it.toDomain() }
+        }
     }
 
     override fun observeChats(): Flow<List<Chat>> {
-        return chatsState.asStateFlow()
+        return chatDao.observeChats().map { entities ->
+            entities.map { it.toDomain() }
+        }
     }
 
     override suspend fun getOrCreateDirectChat(
         peerUserId: UserId,
         peerDisplayName: DisplayName?
     ): Chat {
-        val existingChat = chatsState.value.firstOrNull { chat ->
-            chat.type == ChatType.DIRECT && chat.participantIds.contains(peerUserId)
-        }
+        val chatId = peerUserId.value
+        val existingChat = chatDao.getChatById(chatId)
 
-        if (existingChat != null) return existingChat
+        if (existingChat != null) return existingChat.toDomain()
 
         val newChat = Chat(
-            chatId = ChatId(peerUserId.value), // Usamos el userId como chatId para chats directos simplificados
+            chatId = ChatId(chatId),
             title = peerDisplayName?.value ?: "Unknown",
             type = ChatType.DIRECT,
             participantIds = listOf(peerUserId),
@@ -83,7 +86,7 @@ class RealChatRepository(
             updatedAtEpochMillis = Timestamp(System.currentTimeMillis())
         )
 
-        chatsState.value = chatsState.value + newChat
+        chatDao.upsertChat(newChat.toEntity())
         return newChat
     }
 
@@ -105,15 +108,12 @@ class RealChatRepository(
         )
 
         // 1. Guardar localmente
-        val currentMessages = messagesState.value[chatId].orEmpty()
-        messagesState.value = messagesState.value + (chatId to (currentMessages + message))
+        messageDao.upsertMessage(message.toEntity())
         updateChatMetadata(chatId, text)
 
         // 2. Enviar por Bluetooth
         repositoryScope.launch {
             try {
-                // Buscamos la dirección MAC (DeviceId) asociada a este UserId (chatId)
-                // Usamos la misma lógica de truncación que en el descubrimiento (10 chars)
                 val targetUserId = chatId.value.take(10)
                 val targetDeviceId = userIdToDeviceIdMap[targetUserId]
                 
@@ -122,63 +122,47 @@ class RealChatRepository(
                     meshRepository.sendData(targetDeviceId, payload)
                     
                     // Actualizar estado a enviado
-                    updateMessageDeliveryState(chatId, message.messageId, DeliveryState.DELIVERED)
+                    messageDao.updateDeliveryState(message.messageId.value, DeliveryState.DELIVERED.name)
                 } else {
-                    // Si no tenemos el DeviceId, el par no está al alcance o no se ha descubierto aún
-                    updateMessageDeliveryState(chatId, message.messageId, DeliveryState.FAILED)
+                    messageDao.updateDeliveryState(message.messageId.value, DeliveryState.FAILED.name)
                 }
             } catch (ignored: Exception) {
-                updateMessageDeliveryState(chatId, message.messageId, DeliveryState.FAILED)
+                messageDao.updateDeliveryState(message.messageId.value, DeliveryState.FAILED.name)
             }
         }
     }
 
     private fun handleIncomingRawData(deviceId: String, data: ByteArray) {
-        try {
-            val message = decodeMessagePayload(deviceId, data) ?: return
-            val chatId = message.chatId
-            
-            val currentMessages = messagesState.value[chatId].orEmpty()
-            if (currentMessages.none { it.messageId == message.messageId }) {
-                messagesState.value = messagesState.value + (chatId to (currentMessages + message))
+        repositoryScope.launch {
+            try {
+                val message = decodeMessagePayload(deviceId, data) ?: return@launch
+                val chatId = message.chatId
                 
-                // Asegurar que el chat existe
-                repositoryScope.launch {
-                    getOrCreateDirectChat(message.senderId, null)
-                    updateChatMetadata(chatId, message.body)
-                }
+                // Asegurar que el chat existe antes de guardar el mensaje
+                getOrCreateDirectChat(message.senderId, null)
+                
+                messageDao.upsertMessage(message.toEntity())
+                updateChatMetadata(chatId, message.body)
+            } catch (e: Exception) {
+                // Error al decodificar
             }
-        } catch (e: Exception) {
-            // Error al decodificar
         }
     }
 
-    private fun updateMessageDeliveryState(chatId: ChatId, messageId: MessageId, newState: DeliveryState) {
-        val currentMessages = messagesState.value[chatId].orEmpty()
-        val updatedMessages = currentMessages.map { 
-            if (it.messageId == messageId) it.copy(deliveryState = newState) else it
-        }
-        messagesState.value = messagesState.value + (chatId to updatedMessages)
+    private suspend fun updateChatMetadata(chatId: ChatId, lastMessage: String) {
+        val chat = chatDao.getChatById(chatId.value) ?: return
+        chatDao.upsertChat(chat.copy(
+            lastMessagePreview = lastMessage,
+            updatedAtEpochMillis = System.currentTimeMillis()
+        ))
     }
 
-    private fun updateChatMetadata(chatId: ChatId, lastMessage: String) {
-        val currentChats = chatsState.value
-        val updatedChats = currentChats.map { chat ->
-            if (chat.chatId == chatId) {
-                chat.copy(
-                    lastMessagePreview = lastMessage,
-                    updatedAtEpochMillis = Timestamp(System.currentTimeMillis())
-                )
-            } else {
-                chat
-            }
-        }.sortedByDescending { it.updatedAtEpochMillis.epochMillis }
-        
-        chatsState.value = updatedChats
+    override suspend fun clearAllData() {
+        chatDao.deleteAll()
+        messageDao.deleteAll()
     }
 
     // --- Serialización Simple (Lite) ---
-    // Formato: senderId|body|messageId
     private fun encodeMessagePayload(message: Message): ByteArray {
         val raw = "${message.senderId.value}|${message.body}|${message.messageId.value}"
         return raw.toByteArray(Charsets.UTF_8)
@@ -195,7 +179,7 @@ class RealChatRepository(
         
         return Message(
             messageId = MessageId(messageId),
-            chatId = ChatId(senderId), // El chat de vuelta es el ID del que me envió
+            chatId = ChatId(senderId),
             senderId = UserId(senderId),
             type = MessageType.TEXT,
             body = body,
