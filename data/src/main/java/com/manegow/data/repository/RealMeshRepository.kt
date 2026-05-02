@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -65,6 +66,7 @@ class RealMeshRepository(
         private const val PEER_CLEANUP_INTERVAL_MILLIS = 3_000L
 
         private const val MAX_DISPLAY_NAME_LENGTH = 12
+        private const val MAX_USER_ID_LENGTH = 10
 
         private val SERVICE_UUID: UUID =
             UUID.fromString("12345678-1234-1234-1234-1234567890AB")
@@ -98,19 +100,8 @@ class RealMeshRepository(
     private var isScanning = false
     private var isAdvertising = false
 
-    private val localUserId: String by lazy {
-        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-            ?.take(12)
-            ?.ifBlank { null }
-            ?: UUID.randomUUID().toString().take(12)
-    }
-
-    private val localDisplayName: String by lazy {
-        (Build.MODEL ?: "Android")
-            .trim()
-            .ifBlank { "Android" }
-            .take(MAX_DISPLAY_NAME_LENGTH)
-    }
+    private var localUserId: String = "unknown"
+    private var localDisplayName: String = "Android"
 
     override fun observeNearbyPeers(): Flow<List<Peer>> = peersState.asStateFlow()
 
@@ -118,9 +109,16 @@ class RealMeshRepository(
 
     @SuppressLint("MissingPermission")
     override suspend fun startDiscovery() {
+        // Obtener el ID real antes de empezar
+        val identity = identityRepository.getUserIdentity().firstOrNull()
+        identity?.let {
+            localUserId = it.userId.value
+            localDisplayName = it.displayName.value
+        }
+        
         Log.d(
             TAG,
-            "startDiscovery bluetoothEnabled=${bluetoothAdapter?.isEnabled} " +
+            "startDiscovery userId=$localUserId displayName=$localDisplayName bluetoothEnabled=${bluetoothAdapter?.isEnabled} " +
                     "hasScan=${hasScanPermission()} hasAdvertise=${hasAdvertisePermission()}"
         )
 
@@ -309,13 +307,20 @@ class RealMeshRepository(
             return
         }
 
+        // Detener publicidad previa por seguridad antes de empezar
+        try {
+            bleAdvertiser.stopAdvertising(advertiseCallback)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping advertising before start: ${e.message}")
+        }
+
         val serviceUuid = ParcelUuid(SERVICE_UUID)
         val payload = buildAdvertisePayload(userId = localUserId)
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-            .setConnectable(false)
+            .setConnectable(true)
             .build()
 
         val advertiseData = AdvertiseData.Builder()
@@ -406,8 +411,13 @@ class RealMeshRepository(
         }
 
         override fun onStartFailure(errorCode: Int) {
-            isAdvertising = false
-            Log.e(TAG, "BLE advertising failed: $errorCode")
+            if (errorCode == ADVERTISE_FAILED_ALREADY_STARTED) {
+                isAdvertising = true
+                Log.d(TAG, "BLE advertising already started (error 1)")
+            } else {
+                isAdvertising = false
+                Log.e(TAG, "BLE advertising failed: $errorCode")
+            }
         }
     }
 
@@ -495,7 +505,7 @@ class RealMeshRepository(
     }
 
     private fun buildAdvertisePayload(userId: String): ByteArray {
-        return userId.trim().take(8).toByteArray(Charsets.UTF_8)
+        return userId.take(MAX_USER_ID_LENGTH).toByteArray(Charsets.UTF_8)
     }
 
     private fun parseAdvertisePayload(data: ByteArray?): String? {

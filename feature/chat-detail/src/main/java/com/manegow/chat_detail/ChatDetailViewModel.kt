@@ -26,6 +26,7 @@ class ChatDetailViewModel(
     private val _uiState = MutableStateFlow(
         ChatDetailUiState(
             isLoading = true,
+            localUserId = localUserId,
             chatTitle = peerDisplayName?.value.orEmpty()
         )
     )
