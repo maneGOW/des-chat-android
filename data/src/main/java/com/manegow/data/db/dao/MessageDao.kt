@@ -13,11 +13,11 @@ interface MessageDao {
     fun observeMessages(chatId: String): Flow<List<MessageEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertMessage(message: MessageEntity)
+    suspend fun upsertMessage(message: MessageEntity): Long
 
     @Query("UPDATE messages SET deliveryState = :deliveryState WHERE messageId = :messageId")
-    suspend fun updateDeliveryState(messageId: String, deliveryState: String)
+    suspend fun updateDeliveryState(messageId: String, deliveryState: String): Int
 
     @Query("DELETE FROM messages")
-    suspend fun deleteAll()
+    suspend fun deleteAll(): Int
 }
