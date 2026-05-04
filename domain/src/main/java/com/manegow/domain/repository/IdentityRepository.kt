@@ -10,6 +10,9 @@ interface IdentityRepository {
     suspend fun isUserRegistered(): Boolean
     suspend fun clearAllData()
 
+    suspend fun getPrivateKey(): String?
+    suspend fun saveKeyPair(public: String, private: String)
+
     fun observeSettings(): Flow<UserSettings>
     suspend fun updateSettings(settings: UserSettings)
 }

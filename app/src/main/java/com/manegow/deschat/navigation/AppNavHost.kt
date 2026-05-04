@@ -1,29 +1,22 @@
 package com.manegow.deschat.navigation
 
 import android.net.Uri
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,6 +45,7 @@ import com.manegow.nearby.NearbyViewModel
 import com.manegow.onboarding.OnboardingRoute
 import com.manegow.settings.SettingsScreen
 import com.manegow.settings.SettingsViewModel
+import kotlinx.coroutines.delay
 
 private const val ONBOARDING_ROUTE = "onboarding"
 private const val NEARBY_ROUTE = "nearby"
@@ -76,22 +70,32 @@ fun AppNavHost(
     observeChatMessagesUseCase: ObserveChatMessagesUseCase,
     observeChatsUseCase: ObserveChatsUseCase,
     sendMessageUseCase: SendMessageUseCase,
+    initialChatToOpen: Pair<String, String?>? = null,
+    onInitialChatOpened: () -> Unit = {}
 ) {
     val navController = rememberNavController()
-
     val userIdentity by identityRepository.getUserIdentity().collectAsState(initial = null)
 
     if (userIdentity == null) {
-        // Pantalla de carga o registro
-            OnboardingRoute(
-                identityRepository = identityRepository
-            ) {
-                // El collectAsState detectará el cambio automáticamente
-            }
+        OnboardingRoute(
+            identityRepository = identityRepository
+        ) {
+            // El login cambiará userIdentity y recargará este bloque
+        }
         return
     }
 
     val localUserId = userIdentity!!.userId
+
+    // Manejar la navegación inicial por notificación una vez que el usuario está listo
+    LaunchedEffect(initialChatToOpen) {
+        initialChatToOpen?.let { (chatId, chatName) ->
+            // Pequeño delay para asegurar que el NavHost ya se compuso y tiene el grafo listo
+            delay(100)
+            navController.navigate(buildChatDetailRoute(chatId, chatName))
+            onInitialChatOpened()
+        }
+    }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination

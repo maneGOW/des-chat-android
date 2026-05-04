@@ -9,4 +9,5 @@ interface MeshRepository {
     suspend fun startDiscovery()
     suspend fun stopDiscovery()
     suspend fun sendData(deviceId: String, data: ByteArray)
+    suspend fun fetchPublicKey(deviceId: String): String?
 }

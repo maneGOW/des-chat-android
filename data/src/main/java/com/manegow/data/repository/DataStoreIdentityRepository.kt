@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.manegow.data.crypto.CryptographyManager
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.repository.UserSettings
 import com.manegow.model.identity.DeviceId
@@ -26,6 +27,8 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
         val DEVICE_ID = stringPreferencesKey("device_id")
         val USER_ID = stringPreferencesKey("user_id")
         val DISPLAY_NAME = stringPreferencesKey("display_name")
+        val PUBLIC_KEY = stringPreferencesKey("public_key")
+        val PRIVATE_KEY = stringPreferencesKey("private_key")
         val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
         val SOUNDS_ENABLED = booleanPreferencesKey("sounds_enabled")
         val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
@@ -54,16 +57,29 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
             val deviceId = preferences[PreferencesKeys.DEVICE_ID]
             val userId = preferences[PreferencesKeys.USER_ID]
             val displayName = preferences[PreferencesKeys.DISPLAY_NAME]
+            val publicKey = preferences[PreferencesKeys.PUBLIC_KEY]
 
             if (deviceId != null && userId != null && displayName != null) {
                 UserIdentity(
                     userId = UserId(userId),
                     deviceId = DeviceId(deviceId),
-                    displayName = DisplayName(displayName)
+                    displayName = DisplayName(displayName),
+                    publicKey = publicKey
                 )
             } else {
                 null
             }
+        }
+    }
+
+    override suspend fun getPrivateKey(): String? {
+        return context.dataStore.data.first()[PreferencesKeys.PRIVATE_KEY]
+    }
+
+    override suspend fun saveKeyPair(public: String, private: String) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.PUBLIC_KEY] = public
+            preferences[PreferencesKeys.PRIVATE_KEY] = private
         }
     }
 
@@ -73,6 +89,12 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
             if (preferences[PreferencesKeys.DEVICE_ID] == null) {
                 preferences[PreferencesKeys.DEVICE_ID] = UUID.randomUUID().toString()
                 preferences[PreferencesKeys.USER_ID] = UUID.randomUUID().toString()
+                
+                // Generar llaves para cifrado
+                val crypto = CryptographyManager()
+                val keyPair = crypto.generateKeyPair()
+                preferences[PreferencesKeys.PUBLIC_KEY] = android.util.Base64.encodeToString(keyPair.public.encoded, android.util.Base64.DEFAULT)
+                preferences[PreferencesKeys.PRIVATE_KEY] = android.util.Base64.encodeToString(keyPair.private.encoded, android.util.Base64.DEFAULT)
             }
             preferences[PreferencesKeys.DISPLAY_NAME] = displayName.value
         }
