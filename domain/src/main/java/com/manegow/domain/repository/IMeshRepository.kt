@@ -3,9 +3,9 @@ package com.manegow.domain.repository
 import com.manegow.model.nearby.Peer
 import kotlinx.coroutines.flow.Flow
 
-interface MeshRepository {
+interface IMeshRepository {
     fun observeNearbyPeers(): Flow<List<Peer>>
-    fun observeIncomingData(): Flow<Pair<String, ByteArray>> // deviceId and data
+    fun observeIncomingData(): Flow<Pair<String, ByteArray>>
     suspend fun startDiscovery()
     suspend fun stopDiscovery()
     suspend fun sendData(deviceId: String, data: ByteArray)
