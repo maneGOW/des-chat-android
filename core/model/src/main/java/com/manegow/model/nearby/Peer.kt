@@ -11,5 +11,6 @@ data class Peer(
     val displayName: DisplayName?,
     val signalStrength: SignalStrength,
     val status: PeerStatus,
-    val lastSeen: Timestamp
+    val lastSeen: Timestamp,
+    val publicKey: String? = null
 )

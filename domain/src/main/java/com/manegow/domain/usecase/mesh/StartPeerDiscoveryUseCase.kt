@@ -1,11 +1,11 @@
 package com.manegow.domain.usecase.mesh
 
-import com.manegow.domain.repository.MeshRepository
+import com.manegow.domain.repository.IMeshRepository
 
 class StartPeerDiscoveryUseCase(
-    private val meshRepository: MeshRepository
+    private val IMeshRepository: IMeshRepository
 ) {
     suspend operator fun invoke() {
-        meshRepository.startDiscovery()
+        IMeshRepository.startDiscovery()
     }
 }

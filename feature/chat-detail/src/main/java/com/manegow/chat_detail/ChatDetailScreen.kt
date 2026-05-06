@@ -187,6 +187,12 @@ private fun MessageList(
             key = { message -> message.messageId.value }
         ) { message ->
             val isMine = localUserId != null && message.senderId == localUserId
+
+            android.util.Log.d(
+                "ChatDetailScreen",
+                "render messageId=${message.messageId.value} sender=${message.senderId.value} local=${localUserId?.value} isMine=$isMine chatId=${message.chatId.value}"
+            )
+
             MessageItem(
                 message = message,
                 isMine = isMine
@@ -272,7 +278,7 @@ private fun MessageItem(
 private fun DeliveryStatusIcon(state: DeliveryState) {
     val icon = when (state) {
         DeliveryState.QUEUED -> Icons.Default.Schedule
-        DeliveryState.CREATED, DeliveryState.BROADCASTING, DeliveryState.RELAYED -> Icons.Default.Check
+        DeliveryState.CREATED, DeliveryState.BROADCASTING, DeliveryState.RELAYED, DeliveryState.SENT_TO_MESH -> Icons.Default.Check
         DeliveryState.DELIVERED -> Icons.Default.DoneAll
         DeliveryState.FAILED, DeliveryState.EXPIRED -> Icons.Default.ErrorOutline
     }

@@ -15,10 +15,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.manegow.data.db.AppDatabase
+import com.manegow.data.notifications.NotificationHandler
 import com.manegow.data.repository.DataStoreIdentityRepository
-import com.manegow.data.repository.RealChatRepository
-import com.manegow.data.repository.RealMeshRepository
+import com.manegow.data.repository.ChatRepository
+import com.manegow.data.repository.MeshRepository
 import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
@@ -32,15 +36,19 @@ import com.manegow.nearby.NearbyViewModel
 
 class MainActivity : ComponentActivity() {
 
-    private val meshRepository by lazy { RealMeshRepository(applicationContext, identityRepository) }
+    private val meshRepository by lazy { MeshRepository(applicationContext, identityRepository) }
+
+    private val notificationHandler by lazy { NotificationHandler(applicationContext, identityRepository) }
 
     private val database by lazy { AppDatabase.getDatabase(applicationContext) }
 
     private val chatRepository by lazy { 
-        RealChatRepository(
+        ChatRepository(
             meshRepository = meshRepository,
+            identityRepository = identityRepository,
             chatDao = database.chatDao(),
-            messageDao = database.messageDao()
+            messageDao = database.messageDao(),
+            notificationHandler = notificationHandler
         ) 
     }
 
@@ -81,12 +89,17 @@ class MainActivity : ComponentActivity() {
         SendMessageUseCase(chatRepository)
     }
 
+    private val nearbyViewModel by lazy { provideNearbyViewModel() }
+
+    private var initialChatToOpen by mutableStateOf<Pair<String, String?>?>(null)
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val granted = permissions.values.all { it }
         if (granted) {
             ensureBluetoothEnabled()
+            nearbyViewModel.startDiscovery()
         }
     }
 
@@ -95,6 +108,7 @@ class MainActivity : ComponentActivity() {
     ) { result ->
         when (result.resultCode) {
             RESULT_OK -> {
+                nearbyViewModel.startDiscovery()
                 recreate()
             }
             RESULT_CANCELED -> {
@@ -107,7 +121,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val nearbyViewModel = provideNearbyViewModel()
+        handleIntent(intent)
 
         when {
             !hasRequiredPermissions() -> {
@@ -115,6 +129,7 @@ class MainActivity : ComponentActivity() {
             }
             else -> {
                 ensureBluetoothEnabled()
+                nearbyViewModel.startDiscovery()
             }
         }
         setContent {
@@ -126,9 +141,24 @@ class MainActivity : ComponentActivity() {
                     getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
                     observeChatMessagesUseCase = observeChatMessagesUseCase,
                     observeChatsUseCase = observeChatsUseCase,
-                    sendMessageUseCase = sendMessageUseCase
+                    sendMessageUseCase = sendMessageUseCase,
+                    initialChatToOpen = initialChatToOpen,
+                    onInitialChatOpened = { initialChatToOpen = null }
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        val chatId = intent.getStringExtra("open_chat_id")
+        val chatName = intent.getStringExtra("open_chat_name")
+        if (chatId != null) {
+            initialChatToOpen = chatId to chatName
         }
     }
 
@@ -156,7 +186,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requiredPermissions(): Array<String> {
-        return if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
