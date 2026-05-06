@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -51,35 +52,65 @@ class ChatListViewModel(
 @Composable
 fun ChatListScreen(
     viewModel: ChatListViewModel,
-    onChatClick: (ChatId, String) -> Unit
+    onChatClick: (ChatId, String) -> Unit,
+    onDeleteChat: (ChatId) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Mensajes") }
-            )
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Mensajes",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .padding(start = 24.dp, top = 8.dp, bottom = 16.dp)
+                )
+            }
         }
     ) { padding ->
         when {
             uiState.isLoading -> {
-                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
                     CircularProgressIndicator()
                 }
             }
+
             uiState.chats.isEmpty() -> {
-                EmptyChats(modifier = Modifier.fillMaxSize().padding(padding))
+                EmptyChats(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                )
             }
+
             else -> {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    items(uiState.chats) { chat ->
-                        ChatItem(
-                            chat = chat
-                        ) { onChatClick(chat.chatId, chat.title) }
+                    items(
+                        items = uiState.chats,
+                        key = { it.chatId.value }
+                    ) { chat ->
+                        SwipeToDeleteChatItem(
+                            chat = chat,
+                            onClick = { onChatClick(chat.chatId, chat.title) },
+                            onDelete = { onDeleteChat(chat.chatId) },
+                            modifier = Modifier.animateItem()
+                        )
+
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 72.dp),
                             thickness = 0.5.dp,
@@ -89,6 +120,70 @@ fun ChatListScreen(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SwipeToDeleteChatItem(
+    chat: Chat,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    val dismissState = rememberSwipeToDismissBoxState(
+        positionalThreshold = { distance -> distance * 0.25f },
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                haptic.performHapticFeedback(
+                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                )
+                onDelete()
+                true
+            } else {
+                false
+            }
+        }
+    )
+
+    val progress = dismissState.progress
+    val backgroundColor by androidx.compose.animation.animateColorAsState(
+        targetValue = when (dismissState.targetValue) {
+            SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error.copy(alpha = 0.9f)
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        },
+        label = "deleteBackground"
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier,
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(backgroundColor)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Default.Delete,
+                    contentDescription = "Eliminar chat",
+                    tint = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier
+                        .size((20 + (8 * progress)).dp)
+                )
+            }
+        }
+    ) {
+        ChatItem(
+            chat = chat,
+            onClick = onClick
+        )
     }
 }
 

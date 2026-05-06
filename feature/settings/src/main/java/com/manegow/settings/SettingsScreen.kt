@@ -1,16 +1,22 @@
 package com.manegow.settings
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -19,77 +25,10 @@ import androidx.lifecycle.viewModelScope
 import com.manegow.domain.repository.ChatRepository
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.repository.UserSettings
+import com.manegow.model.identity.AvatarId
 import com.manegow.model.identity.DisplayName
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-
-data class SettingsUiState(
-    val nickname: String = "",
-    val settings: UserSettings = UserSettings(),
-    val isSaving: Boolean = false,
-    val showNicknameDialog: Boolean = false,
-)
-
-class SettingsViewModel(
-    private val identityRepository: IdentityRepository,
-    private val chatRepository: ChatRepository
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(SettingsUiState())
-    val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
-
-    init {
-        viewModelScope.launch {
-            identityRepository.getUserIdentity().collect { identity ->
-                _uiState.update { it.copy(nickname = identity?.displayName?.value ?: "") }
-            }
-        }
-        viewModelScope.launch {
-            identityRepository.observeSettings().collect { settings ->
-                _uiState.update { it.copy(settings = settings) }
-            }
-        }
-    }
-
-    fun onNicknameChanged(newNickname: String) {
-        viewModelScope.launch {
-            identityRepository.saveDisplayName(DisplayName(newNickname))
-            _uiState.update { it.copy(showNicknameDialog = false) }
-        }
-    }
-
-    fun toggleNotifications(enabled: Boolean) {
-        updateSettings { it.copy(notificationsEnabled = enabled) }
-    }
-
-    fun toggleSounds(enabled: Boolean) {
-        updateSettings { it.copy(soundsEnabled = enabled) }
-    }
-
-    fun toggleVibration(enabled: Boolean) {
-        updateSettings { it.copy(vibrationEnabled = enabled) }
-    }
-
-    private fun updateSettings(update: (UserSettings) -> UserSettings) {
-        viewModelScope.launch {
-            val currentSettings = _uiState.value.settings
-            val newSettings = update(currentSettings)
-            identityRepository.updateSettings(newSettings)
-        }
-    }
-
-    fun setShowNicknameDialog(show: Boolean) {
-        _uiState.update { it.copy(showNicknameDialog = show) }
-    }
-
-    fun deleteSession(onDeleted: () -> Unit) {
-        viewModelScope.launch {
-            identityRepository.clearAllData()
-            chatRepository.clearAllData()
-            onDeleted()
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,21 +36,34 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     onSessionDeleted: () -> Unit
 ) {
+
     val uiState by viewModel.uiState.collectAsState()
     var tempNickname by remember { mutableStateOf("") }
+    var tempAvatarName by remember { mutableStateOf("HAPPY") }
     
     LaunchedEffect(uiState.showNicknameDialog) {
         if (uiState.showNicknameDialog) {
             tempNickname = uiState.nickname
+            tempAvatarName = uiState.avatarName
+            println("Avatar name $tempAvatarName - ${uiState.avatarName}")
         }
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Ajustes") }
-            )
-        }
+            topBar = {
+                Surface(
+                    color = MaterialTheme.colorScheme.background,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Ajustes",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .padding(start = 24.dp, top = 8.dp, bottom = 16.dp)
+                    )
+                }
+            }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -120,10 +72,9 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             SettingsSection(title = "Perfil") {
-                SettingsItem(
-                    title = "Nickname",
-                    subtitle = uiState.nickname.ifBlank { "No configurado" },
-                    icon = Icons.Default.Person,
+                ProfileSettingsItem(
+                    avatarName = uiState.avatarName,
+                    nickname = uiState.nickname,
                     onClick = { viewModel.setShowNicknameDialog(show = true) }
                 )
             }
@@ -162,32 +113,262 @@ fun SettingsScreen(
     }
 
     if (uiState.showNicknameDialog) {
-        AlertDialog(
-            onDismissRequest = { viewModel.setShowNicknameDialog(false) },
-            title = { Text("Cambiar Nickname") },
-            text = {
-                OutlinedTextField(
-                    value = tempNickname,
-                    onValueChange = { tempNickname = it },
-                    label = { Text("Nickname") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { viewModel.onNicknameChanged(tempNickname) },
-                    enabled = tempNickname.isNotBlank()
-                ) {
-                    Text("Guardar")
+            AlertDialog(
+                onDismissRequest = { viewModel.setShowNicknameDialog(false) },
+                title = { Text("Editar perfil") },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        FaceAvatar(
+                            avatarId = AvatarId.valueOf(tempAvatarName),
+                            modifier = Modifier
+                                .size(72.dp)
+                                .align(Alignment.CenterHorizontally)
+                        )
+
+                        AvatarPickerRow(
+                            selectedAvatarName = tempAvatarName,
+                            onAvatarSelected = { tempAvatarName = it }
+                        )
+
+                        OutlinedTextField(
+                            value = tempNickname,
+                            onValueChange = { tempNickname = it },
+                            label = { Text("Username") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.onUserDataChanged(
+                                avatarName = tempAvatarName,
+                                newNickname = tempNickname
+                            )
+                        },
+                        enabled = tempNickname.isNotBlank()
+                    ) {
+                        Text("Guardar")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.setShowNicknameDialog(false) }) {
+                        Text("Cancelar")
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.setShowNicknameDialog(false) }) {
-                    Text("Cancelar")
+            )
+    }
+}
+
+@Composable
+private fun AvatarPickerRow(
+    selectedAvatarName: String,
+    onAvatarSelected: (String) -> Unit
+) {
+    val avatars = listOf("HAPPY", "SAD", "SURPRISED", "ANGRY", "COOL", "WINK")
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        avatars.forEach { avatar ->
+            val selected = avatar == selectedAvatarName
+
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clickable { onAvatarSelected(avatar) },
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    } else {
+                        Color.Transparent
+                    },
+                    tonalElevation = if (selected) 2.dp else 0.dp,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        FaceAvatar(
+                            avatarId = AvatarId.valueOf(avatar),
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ProfileSettingsItem(
+    avatarName: String,
+    nickname: String,
+    onClick: () -> Unit
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = {
+            Text(
+                text = nickname.ifBlank { "No configurado" },
+                fontWeight = FontWeight.Bold
+            )
+        },
+        supportingContent = {
+            Text("Toca para cambiar avatar y username")
+        },
+        leadingContent = {
+            FaceAvatar(
+                avatarId = AvatarId.valueOf(avatarName),
+                modifier = Modifier.size(48.dp)
+            )
+        }
+    )
+}
+
+@Composable
+fun FaceAvatar(
+    avatarId: AvatarId,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val faceColor = Color(0xFFFFC857)
+        val eyeColor = Color(0xFF1F2937)
+        val mouthColor = Color(0xFF1F2937)
+        val stroke = size.minDimension * 0.06f
+        val radius = size.minDimension / 2f
+
+        drawCircle(
+            color = faceColor,
+            radius = radius
         )
+
+        val eyeY = size.height * 0.38f
+        val leftEyeX = size.width * 0.33f
+        val rightEyeX = size.width * 0.67f
+
+        when (avatarId) {
+            AvatarId.COOL -> {
+                drawLine(
+                    color = eyeColor,
+                    start = Offset(size.width * 0.2f, eyeY),
+                    end = Offset(size.width * 0.8f, eyeY),
+                    strokeWidth = stroke * 1.3f,
+                    cap = StrokeCap.Round
+                )
+                drawRect(
+                    color = eyeColor,
+                    topLeft = Offset(size.width * 0.18f, eyeY - stroke * 1.4f),
+                    size = androidx.compose.ui.geometry.Size(size.width * 0.22f, stroke * 2.8f)
+                )
+                drawRect(
+                    color = eyeColor,
+                    topLeft = Offset(size.width * 0.60f, eyeY - stroke * 1.4f),
+                    size = androidx.compose.ui.geometry.Size(size.width * 0.22f, stroke * 2.8f)
+                )
+            }
+
+            AvatarId.WINK -> {
+                drawCircle(color = eyeColor, radius = stroke * 0.9f, center = Offset(leftEyeX, eyeY))
+                drawLine(
+                    color = eyeColor,
+                    start = Offset(rightEyeX - stroke, eyeY),
+                    end = Offset(rightEyeX + stroke, eyeY),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+            }
+
+            else -> {
+                drawCircle(color = eyeColor, radius = stroke * 0.9f, center = Offset(leftEyeX, eyeY))
+                drawCircle(color = eyeColor, radius = stroke * 0.9f, center = Offset(rightEyeX, eyeY))
+            }
+        }
+
+        when (avatarId) {
+            AvatarId.HAPPY -> {
+                drawArc(
+                    color = mouthColor,
+                    startAngle = 20f,
+                    sweepAngle = 140f,
+                    useCenter = false,
+                    topLeft = Offset(size.width * 0.28f, size.height * 0.45f),
+                    size = androidx.compose.ui.geometry.Size(size.width * 0.44f, size.height * 0.28f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+
+            AvatarId.SAD -> {
+                drawArc(
+                    color = mouthColor,
+                    startAngle = 200f,
+                    sweepAngle = 140f,
+                    useCenter = false,
+                    topLeft = Offset(size.width * 0.28f, size.height * 0.58f),
+                    size = androidx.compose.ui.geometry.Size(size.width * 0.44f, size.height * 0.20f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+
+            AvatarId.SURPRISED -> {
+                drawCircle(
+                    color = mouthColor,
+                    radius = stroke * 1.5f,
+                    center = Offset(size.width * 0.5f, size.height * 0.68f)
+                )
+            }
+
+            AvatarId.ANGRY -> {
+                drawLine(
+                    color = mouthColor,
+                    start = Offset(size.width * 0.24f, size.height * 0.26f),
+                    end = Offset(size.width * 0.40f, size.height * 0.32f),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = mouthColor,
+                    start = Offset(size.width * 0.76f, size.height * 0.26f),
+                    end = Offset(size.width * 0.60f, size.height * 0.32f),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = mouthColor,
+                    start = Offset(size.width * 0.34f, size.height * 0.72f),
+                    end = Offset(size.width * 0.66f, size.height * 0.72f),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+            }
+
+            AvatarId.COOL -> {
+                drawLine(
+                    color = mouthColor,
+                    start = Offset(size.width * 0.34f, size.height * 0.70f),
+                    end = Offset(size.width * 0.66f, size.height * 0.70f),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+            }
+
+            AvatarId.WINK -> {
+                drawArc(
+                    color = mouthColor,
+                    startAngle = 15f,
+                    sweepAngle = 120f,
+                    useCenter = false,
+                    topLeft = Offset(size.width * 0.32f, size.height * 0.50f),
+                    size = androidx.compose.ui.geometry.Size(size.width * 0.34f, size.height * 0.22f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+        }
     }
 }
 

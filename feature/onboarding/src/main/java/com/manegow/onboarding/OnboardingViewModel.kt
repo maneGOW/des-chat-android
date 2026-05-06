@@ -3,6 +3,7 @@ package com.manegow.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.manegow.domain.repository.IdentityRepository
+import com.manegow.model.identity.AvatarId
 import com.manegow.model.identity.DisplayName
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,40 +14,41 @@ class OnboardingViewModel(
     private val identityRepository: IdentityRepository
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<OnboardingUiState>(OnboardingUiState.Welcome)
+    private val _uiState = MutableStateFlow<OnboardingUiState>(OnboardingUiState.Intro)
     val uiState: StateFlow<OnboardingUiState> = _uiState.asStateFlow()
 
     private val _name = MutableStateFlow("")
     val name: StateFlow<String> = _name.asStateFlow()
 
-    fun onNameChanged(newName: String) {
-        _name.value = newName
+    private val _avatar = MutableStateFlow(AvatarId.HAPPY)
+    val avatar: StateFlow<AvatarId> = _avatar.asStateFlow()
+
+    fun onNameChanged(value: String) {
+        _name.value = value
+    }
+
+    fun onAvatarSelected(value: AvatarId) {
+        _avatar.value = value
     }
 
     fun onNextClicked() {
-        when (_uiState.value) {
-            OnboardingUiState.Welcome -> _uiState.value = OnboardingUiState.AppPurpose
-            OnboardingUiState.AppPurpose -> _uiState.value = OnboardingUiState.InputName
-            OnboardingUiState.InputName -> {
-                if (_name.value.isNotBlank()) {
-                    saveAndFinish()
-                }
+        _uiState.value = when (_uiState.value) {
+            OnboardingUiState.Intro -> OnboardingUiState.Permissions
+            OnboardingUiState.Permissions -> OnboardingUiState.AvatarSelection
+            OnboardingUiState.AvatarSelection -> OnboardingUiState.Username
+            OnboardingUiState.Username -> {
+                saveIdentity()
+                OnboardingUiState.Finished
             }
-            OnboardingUiState.Finished -> { /* No-op */ }
+            OnboardingUiState.Finished -> OnboardingUiState.Finished
         }
     }
 
-    private fun saveAndFinish() {
+    private fun saveIdentity() {
         viewModelScope.launch {
-            identityRepository.saveDisplayName(DisplayName(_name.value))
+            println("Saved avatar ${_avatar.value.name}")
+            identityRepository.saveAvatarAndDisplayName(_avatar.value.name, DisplayName(_name.value))
             _uiState.value = OnboardingUiState.Finished
         }
     }
-}
-
-sealed interface OnboardingUiState {
-    object Welcome : OnboardingUiState
-    object AppPurpose : OnboardingUiState
-    object InputName : OnboardingUiState
-    object Finished : OnboardingUiState
 }

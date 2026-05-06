@@ -36,12 +36,18 @@ fun NearbyScreen(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(text = "Nearby Peers")
-                },
-                colors = TopAppBarDefaults.topAppBarColors()
-            )
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Personas",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .padding(start = 24.dp, top = 8.dp, bottom = 16.dp)
+                )
+            }
         }
     ) { innerPadding ->
         when {

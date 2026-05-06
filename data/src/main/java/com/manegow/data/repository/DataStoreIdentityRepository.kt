@@ -10,6 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.manegow.data.crypto.CryptographyManager
 import com.manegow.domain.repository.IdentityRepository
 import com.manegow.domain.repository.UserSettings
+import com.manegow.model.identity.AvatarId
 import com.manegow.model.identity.DeviceId
 import com.manegow.model.identity.DisplayName
 import com.manegow.model.identity.UserId
@@ -27,6 +28,7 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
         val DEVICE_ID = stringPreferencesKey("device_id")
         val USER_ID = stringPreferencesKey("user_id")
         val DISPLAY_NAME = stringPreferencesKey("display_name")
+        val AVATAR_ID = stringPreferencesKey("avatar_id")
         val PUBLIC_KEY = stringPreferencesKey("public_key")
         val PRIVATE_KEY = stringPreferencesKey("private_key")
         val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
@@ -58,11 +60,13 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
             val userId = preferences[PreferencesKeys.USER_ID]
             val displayName = preferences[PreferencesKeys.DISPLAY_NAME]
             val publicKey = preferences[PreferencesKeys.PUBLIC_KEY]
+            val avatarId = preferences[PreferencesKeys.AVATAR_ID]
 
             if (deviceId != null && userId != null && displayName != null) {
                 UserIdentity(
                     userId = UserId(userId),
                     deviceId = DeviceId(deviceId),
+                    avatarId = AvatarId.valueOf(avatarId ?: "HAPPY"),
                     displayName = DisplayName(displayName),
                     publicKey = publicKey
                 )
@@ -96,6 +100,22 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
                 preferences[PreferencesKeys.PUBLIC_KEY] = android.util.Base64.encodeToString(keyPair.public.encoded, android.util.Base64.DEFAULT)
                 preferences[PreferencesKeys.PRIVATE_KEY] = android.util.Base64.encodeToString(keyPair.private.encoded, android.util.Base64.DEFAULT)
             }
+            preferences[PreferencesKeys.DISPLAY_NAME] = displayName.value
+        }
+    }
+
+    override suspend fun saveAvatarAndDisplayName(avatar: String, displayName: DisplayName) {
+        context.dataStore.edit { preferences ->
+            if (preferences[PreferencesKeys.DEVICE_ID] == null) {
+                preferences[PreferencesKeys.DEVICE_ID] = UUID.randomUUID().toString()
+                preferences[PreferencesKeys.USER_ID] = UUID.randomUUID().toString()
+
+                val crypto = CryptographyManager()
+                val keyPair = crypto.generateKeyPair()
+                preferences[PreferencesKeys.PUBLIC_KEY] = android.util.Base64.encodeToString(keyPair.public.encoded, android.util.Base64.DEFAULT)
+                preferences[PreferencesKeys.PRIVATE_KEY] = android.util.Base64.encodeToString(keyPair.private.encoded, android.util.Base64.DEFAULT)
+            }
+            preferences[PreferencesKeys.AVATAR_ID] = avatar
             preferences[PreferencesKeys.DISPLAY_NAME] = displayName.value
         }
     }

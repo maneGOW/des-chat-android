@@ -143,6 +143,7 @@ class MeshRepository(
 
     @Volatile
     private var localUserId: String = "unknown"
+    private var identityJob: kotlinx.coroutines.Job? = null
 
     @Volatile
     private var isScanning = false
@@ -478,7 +479,25 @@ class MeshRepository(
             return
         }
 
-        localUserId = identityRepository.getUserIdentity().firstOrNull()?.userId?.value ?: "unknown"
+        // Observar la identidad de forma reactiva para evitar el bug de "unknown"
+        identityJob?.cancel()
+        identityJob = scope.launch {
+            identityRepository.getUserIdentity().collect { identity ->
+                val newId = identity?.userId?.value ?: "unknown"
+                if (newId != localUserId) {
+                    val oldId = localUserId
+                    localUserId = newId
+                    Log.d(TAG, "Identity updated: $oldId -> $localUserId")
+                    
+                    // Si ya estamos anunciando, reiniciamos el anuncio con el nuevo ID
+                    if (isAdvertising) {
+                        stopAdvertisingInternal()
+                        delay(200)
+                        startAdvertisingInternal()
+                    }
+                }
+            }
+        }
 
         setupGattServer()
         startScanningInternal()
@@ -487,6 +506,9 @@ class MeshRepository(
     }
 
     override suspend fun stopDiscovery() {
+        identityJob?.cancel()
+        identityJob = null
+
         stopScanningInternal()
         stopAdvertisingInternal()
 

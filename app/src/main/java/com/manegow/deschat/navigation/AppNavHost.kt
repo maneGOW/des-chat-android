@@ -38,6 +38,7 @@ import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.ObserveChatsUseCase
 import com.manegow.domain.usecase.chat.SendMessageUseCase
+import com.manegow.model.chat.ChatId
 import com.manegow.model.identity.DisplayName
 import com.manegow.model.identity.UserId
 import com.manegow.nearby.NearbyRoute
@@ -175,6 +176,9 @@ fun AppNavHost(
                                 peerName = name
                             )
                         )
+                    },
+                    onDeleteChat = { chatId ->
+                        deleteChat(chatId)
                     }
                 )
             }
@@ -242,6 +246,10 @@ private fun buildChatDetailRoute(
 ): String {
     val encodedName = Uri.encode(peerName.orEmpty(), "UTF-8")
     return "$CHAT_DETAIL_ROUTE/$peerId?$ARG_PEER_NAME=$encodedName"
+}
+
+fun deleteChat(chatId: ChatId) {
+    println("Chat Id $chatId")
 }
 
 private fun chatDetailViewModelFactory(
