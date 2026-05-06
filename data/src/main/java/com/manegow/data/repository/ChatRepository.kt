@@ -81,9 +81,12 @@ class ChatRepository(
     private var localUserId: String? = null
 
     init {
+        // Observar la identidad de forma reactiva
         repositoryScope.launch {
-            localUserId = identityRepository.getUserIdentity().firstOrNull()?.userId?.value
-            Log.d(TAG, "Local user loaded: $localUserId")
+            identityRepository.getUserIdentity().collect { identity ->
+                localUserId = identity?.userId?.value
+                Log.d(TAG, "Local identity updated: $localUserId")
+            }
         }
 
         repositoryScope.launch {
@@ -233,12 +236,16 @@ class ChatRepository(
     private fun handleIncomingRawData(deviceId: String, data: ByteArray) {
         repositoryScope.launch {
             try {
-                val me = requireLocalUserId()
-                val wire = decodeMessagePayload(data) ?: return@launch
-
+                val wire = decodeMessagePayload(data) ?: run {
+                    Log.w(TAG, "Could not decode message from $deviceId")
+                    return@launch
+                }
+                
+                val me = localUserId ?: identityRepository.getUserIdentity().firstOrNull()?.userId?.value
+                
                 Log.d(
                     TAG,
-                    "Incoming route sender=${wire.senderId} dest=${wire.destinationId} me=$me"
+                    "Incoming message: sender=${wire.senderId} dest=${wire.destinationId} me=$me"
                 )
 
                 if (wire.destinationId.isBlank() || wire.destinationId == UNKNOWN_ID) {
@@ -354,6 +361,14 @@ class ChatRepository(
         )
     }
 
+    override suspend fun deleteChat(chatId: ChatId) {
+        chatDao.deleteById(chatId.value)
+        messageDao.deleteByChatId(chatId.value)
+        shortUserIdToDeviceIdMap.remove(chatId.value)
+        shortUserIdToFullUserIdMap.remove(chatId.value)
+        shortUserIdToDisplayNameMap.remove(chatId.value)
+    }
+
     override suspend fun clearAllData() {
         chatDao.deleteAll()
         messageDao.deleteAll()
@@ -361,12 +376,6 @@ class ChatRepository(
         shortUserIdToFullUserIdMap.clear()
         shortUserIdToDisplayNameMap.clear()
         seenMessageIds.clear()
-    }
-
-    private suspend fun requireLocalUserId(): String? {
-        if (!localUserId.isNullOrBlank()) return localUserId
-        localUserId = identityRepository.getUserIdentity().firstOrNull()?.userId?.value
-        return localUserId
     }
 
     private fun directChatIdFor(userId: String): String {

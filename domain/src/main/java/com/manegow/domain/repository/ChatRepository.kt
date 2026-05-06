@@ -22,5 +22,7 @@ interface ChatRepository {
         text: String
     )
 
+    suspend fun deleteChat(chatId: ChatId)
+
     suspend fun clearAllData()
 }

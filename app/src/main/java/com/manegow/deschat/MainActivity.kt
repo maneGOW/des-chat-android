@@ -25,6 +25,7 @@ import com.manegow.data.repository.ChatRepository
 import com.manegow.data.repository.MeshRepository
 import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
+import com.manegow.domain.usecase.chat.DeleteChatUseCase
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.ObserveChatsUseCase
@@ -85,6 +86,10 @@ class MainActivity : ComponentActivity() {
         ObserveChatsUseCase(chatRepository)
     }
 
+    private val deleteChatUseCase by lazy {
+        DeleteChatUseCase(chatRepository)
+    }
+
     private val sendMessageUseCase by lazy {
         SendMessageUseCase(chatRepository)
     }
@@ -141,6 +146,7 @@ class MainActivity : ComponentActivity() {
                     getOrCreateDirectChatUseCase = getOrCreateDirectChatUseCase,
                     observeChatMessagesUseCase = observeChatMessagesUseCase,
                     observeChatsUseCase = observeChatsUseCase,
+                    deleteChatUseCase = deleteChatUseCase,
                     sendMessageUseCase = sendMessageUseCase,
                     initialChatToOpen = initialChatToOpen,
                     onInitialChatOpened = { initialChatToOpen = null }

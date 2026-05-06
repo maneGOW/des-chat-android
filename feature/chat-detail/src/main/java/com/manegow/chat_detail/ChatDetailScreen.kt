@@ -12,12 +12,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
@@ -41,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,12 +65,38 @@ fun ChatDetailScreen(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+            Surface(
+                color = Color.Transparent,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(start = 8.dp, end = 16.dp, top = 8.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    IconButton(
+                        onClick = onBackClick,
+                        modifier = Modifier
+                            .padding(top = 1.dp)
+                            .size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.size(8.dp))
+
+                    Column(
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Text(
                             text = uiState.chatTitle.ifBlank { "Chat" },
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = if (uiState.isSending) "Sending..." else "Online",
@@ -75,17 +104,8 @@ fun ChatDetailScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                },
-                navigationIcon = {
-                    TextButton(onClick = onBackClick) {
-                        Text(text = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
+                }
+            }
         },
         bottomBar = {
             if (!uiState.isLoading && (uiState.error == null)) {
