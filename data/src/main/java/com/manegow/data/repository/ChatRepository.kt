@@ -46,6 +46,9 @@ class ChatRepository(
         private const val TAG = "RealChatRepository"
         private const val DEFAULT_TTL = 3
         private const val MAX_SEEN_MESSAGES = 1000
+        private const val DIRECT_CHAT_ID_LENGTH = 8
+        private const val UNKNOWN_ID = "unknown"
+        private const val BROADCAST_ID = "all"
     }
 
     @SuppressLint("UnsafeOptInUsageError")
@@ -62,8 +65,16 @@ class ChatRepository(
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val userIdToDeviceIdMap = ConcurrentHashMap<String, String>()
-    private val userIdToDisplayNameMap = ConcurrentHashMap<String, String>()
+    // device lookup por short id de chat (8 chars)
+    private val shortUserIdToDeviceIdMap = ConcurrentHashMap<String, String>()
+
+    // relación short -> full uuid
+    private val shortUserIdToFullUserIdMap = ConcurrentHashMap<String, String>()
+
+    // nombres por short id
+    private val shortUserIdToDisplayNameMap = ConcurrentHashMap<String, String>()
+
+    // dedupe lógico por sender + messageId
     private val seenMessageIds = ConcurrentHashMap<String, Long>()
 
     @Volatile
@@ -77,7 +88,7 @@ class ChatRepository(
 
         repositoryScope.launch {
             meshRepository.observeIncomingData().collect { (deviceId, data) ->
-                println("Incoming data recieved $deviceId ${String(data)}")
+                Log.d(TAG, "Incoming data recieved $deviceId ${String(data, Charsets.UTF_8)}")
                 handleIncomingRawData(deviceId, data)
             }
         }
@@ -85,30 +96,19 @@ class ChatRepository(
         repositoryScope.launch {
             meshRepository.observeNearbyPeers().collect { peers ->
                 peers.forEach { peer ->
-                    val userId = peer.userId?.value ?: return@forEach
-                    userIdToDeviceIdMap[userId] = peer.deviceId.value
+                    val peerUserId = peer.userId?.value ?: return@forEach
+                    if (peerUserId.isBlank() || peerUserId == UNKNOWN_ID) return@forEach
 
-                    val name = peer.displayName?.value ?: return@forEach
-                    if (name.isNotBlank() && name != userId && name != "Desconocido") {
-                        userIdToDisplayNameMap[userId] = name
-                        updateChatTitleIfNecessary(userId, name)
+                    val shortId = directChatIdFor(peerUserId)
+                    shortUserIdToDeviceIdMap[shortId] = peer.deviceId.value
+                    shortUserIdToFullUserIdMap[shortId] = peerUserId
+
+                    val name = peer.displayName?.value
+                    if (!name.isNullOrBlank() && name != UNKNOWN_ID && name != shortId) {
+                        shortUserIdToDisplayNameMap[shortId] = name
+                        updateChatTitleIfNecessary(shortId, name)
                     }
                 }
-            }
-        }
-    }
-
-    private suspend fun requireLocalUserId(): String? {
-        if (localUserId != null) return localUserId
-        localUserId = identityRepository.getUserIdentity().firstOrNull()?.userId?.value
-        return localUserId
-    }
-
-    private fun updateChatTitleIfNecessary(chatId: String, newName: String) {
-        repositoryScope.launch {
-            val existing = chatDao.getChatById(chatId) ?: return@launch
-            if (existing.title == "Desconocido" || existing.title == chatId) {
-                chatDao.upsertChat(existing.copy(title = newName))
             }
         }
     }
@@ -125,16 +125,18 @@ class ChatRepository(
         peerUserId: UserId,
         peerDisplayName: DisplayName?
     ): Chat {
-        val chatIdValue = directChatIdFor(peerUserId.value)
-        val existing = chatDao.getChatById(chatIdValue)
+        val shortChatId = directChatIdFor(peerUserId.value)
+        val existing = chatDao.getChatById(shortChatId)
         if (existing != null) return existing.toDomain()
 
+        shortUserIdToFullUserIdMap[shortChatId] = peerUserId.value
+
         val resolvedName = peerDisplayName?.value
-            ?: userIdToDisplayNameMap[chatIdValue]
-            ?: chatIdValue
+            ?: shortUserIdToDisplayNameMap[shortChatId]
+            ?: shortChatId
 
         val newChat = Chat(
-            chatId = ChatId(chatIdValue),
+            chatId = ChatId(shortChatId),
             title = resolvedName,
             type = ChatType.DIRECT,
             participantIds = listOf(peerUserId),
@@ -149,6 +151,11 @@ class ChatRepository(
     override suspend fun sendMessage(chatId: ChatId, senderId: UserId, text: String) {
         val resolvedChatId = chatId.value
         val resolvedSenderId = senderId.value
+
+        if (resolvedChatId.isBlank() || resolvedChatId == UNKNOWN_ID) {
+            Log.w(TAG, "Refusing to send message with invalid destinationId=$resolvedChatId")
+            return
+        }
 
         val message = Message(
             messageId = MessageId(UUID.randomUUID().toString()),
@@ -166,46 +173,59 @@ class ChatRepository(
         updateChatMetadata(ChatId(resolvedChatId), text)
 
         repositoryScope.launch {
-            val payload = encodeMessagePayload(
-                destinationId = resolvedChatId,
-                message = message,
-                ttl = DEFAULT_TTL
-            )
+            try {
+                val payload = encodeMessagePayload(
+                    destinationId = resolvedChatId,
+                    message = message,
+                    ttl = DEFAULT_TTL
+                )
 
-            val directDeviceId = userIdToDeviceIdMap[resolvedChatId]
+                val directDeviceId = shortUserIdToDeviceIdMap[resolvedChatId]
 
-            if (directDeviceId != null) {
-                try {
-                    meshRepository.sendData(directDeviceId, payload)
-                    messageDao.updateDeliveryState(
-                        message.messageId.value,
-                        DeliveryState.BROADCASTING.name
-                    )
-                    return@launch
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Direct send failed", t)
+                if (directDeviceId != null) {
+                    try {
+                        Log.d(TAG, "Direct send chatId=$resolvedChatId device=$directDeviceId")
+                        meshRepository.sendData(directDeviceId, payload)
+                        messageDao.updateDeliveryState(
+                            message.messageId.value,
+                            DeliveryState.BROADCASTING.name
+                        )
+                        return@launch
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Direct send failed chatId=$resolvedChatId", t)
+                    }
                 }
-            }
 
-            floodNetwork(payload, excludeDeviceIds = setOfNotNull(directDeviceId))
-            messageDao.updateDeliveryState(
-                message.messageId.value,
-                DeliveryState.BROADCASTING.name
-            )
+                floodNetwork(payload, excludeDeviceIds = setOfNotNull(directDeviceId))
+
+                messageDao.updateDeliveryState(
+                    message.messageId.value,
+                    DeliveryState.BROADCASTING.name
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "sendMessage failed", t)
+                messageDao.updateDeliveryState(
+                    message.messageId.value,
+                    DeliveryState.FAILED.name
+                )
+            }
         }
     }
 
-    private fun directChatIdFor(userId: String): String {
-        return userId.take(8)
-    }
-
-    private suspend fun floodNetwork(payload: ByteArray, excludeDeviceIds: Set<String>) {
+    private suspend fun floodNetwork(
+        payload: ByteArray,
+        excludeDeviceIds: Set<String> = emptySet()
+    ) {
         val nearbyPeers = meshRepository.observeNearbyPeers().firstOrNull().orEmpty()
-        nearbyPeers.filterNot { it.deviceId.value in excludeDeviceIds }.forEach { peer ->
+        val targets = nearbyPeers.filterNot { it.deviceId.value in excludeDeviceIds }
+
+        Log.d(TAG, "Relay: flooding to ${targets.size} nearby peers")
+
+        targets.forEach { peer ->
             try {
                 meshRepository.sendData(peer.deviceId.value, payload)
             } catch (t: Throwable) {
-                Log.w(TAG, "Flood failed", t)
+                Log.w(TAG, "Relay: flood failed device=${peer.deviceId.value}", t)
             }
         }
     }
@@ -213,20 +233,55 @@ class ChatRepository(
     private fun handleIncomingRawData(deviceId: String, data: ByteArray) {
         repositoryScope.launch {
             try {
-                val me = localUserId
+                val me = requireLocalUserId()
                 val wire = decodeMessagePayload(data) ?: return@launch
 
+                Log.d(
+                    TAG,
+                    "Incoming route sender=${wire.senderId} dest=${wire.destinationId} me=$me"
+                )
+
+                if (wire.destinationId.isBlank() || wire.destinationId == UNKNOWN_ID) {
+                    Log.w(
+                        TAG,
+                        "Dropping message with invalid destinationId messageId=${wire.messageId} sender=${wire.senderId}"
+                    )
+                    return@launch
+                }
+
+                if (wire.senderId.isBlank() || wire.senderId == UNKNOWN_ID) {
+                    Log.w(TAG, "Dropping message with invalid senderId messageId=${wire.messageId}")
+                    return@launch
+                }
+
                 val dedupeKey = "${wire.senderId}:${wire.messageId}"
-                if (seenMessageIds.putIfAbsent(dedupeKey, System.currentTimeMillis()) != null) return@launch
+                val inserted = seenMessageIds.putIfAbsent(
+                    dedupeKey,
+                    System.currentTimeMillis()
+                ) == null
+
+                if (!inserted) {
+                    Log.d(TAG, "Duplicate ignored key=$dedupeKey from=$deviceId")
+                    return@launch
+                }
+
                 trimSeenMessagesIfNeeded()
 
-                userIdToDeviceIdMap[wire.senderId.take(8)] = deviceId
+                val senderShortId = directChatIdFor(wire.senderId)
+                shortUserIdToDeviceIdMap[senderShortId] = deviceId
+                shortUserIdToFullUserIdMap[senderShortId] = wire.senderId
 
-                val senderChatId = directChatIdFor(wire.senderId)
+                val isOwnLoopedMessage = me != null && wire.senderId == me
+                if (isOwnLoopedMessage) {
+                    Log.d(TAG, "Dropping looped own messageId=${wire.messageId}")
+                    return@launch
+                }
+
+                val isForMe = matchesLocalId(wire.destinationId, me)
 
                 val message = Message(
                     messageId = MessageId(wire.messageId),
-                    chatId = ChatId(senderChatId),
+                    chatId = ChatId(senderShortId),
                     senderId = UserId(wire.senderId),
                     type = MessageType.TEXT,
                     body = wire.body,
@@ -236,16 +291,17 @@ class ChatRepository(
                     isEncrypted = false
                 )
 
-                val isForMe = wire.destinationId == "all" ||
-                        wire.destinationId == me ||
-                        (me?.startsWith(wire.destinationId) == true)
-
                 if (isForMe) {
+                    Log.d(TAG, "Message is for me: ${wire.messageId}")
                     processMessageForMe(message)
+                } else {
+                    Log.d(TAG, "Message is NOT for me: ${wire.messageId}")
                 }
 
                 if (wire.ttl > 0 && !isForMe) {
-                    val relayedPayload = encodeWireMessage(wire.copy(ttl = wire.ttl - 1))
+                    val nextTtl = wire.ttl - 1
+                    Log.d(TAG, "Relaying messageId=${wire.messageId} ttl=$nextTtl")
+                    val relayedPayload = encodeWireMessage(wire.copy(ttl = nextTtl))
                     floodNetwork(relayedPayload, excludeDeviceIds = setOf(deviceId))
                 }
             } catch (t: Throwable) {
@@ -256,48 +312,106 @@ class ChatRepository(
 
     private suspend fun processMessageForMe(message: Message) {
         val senderFullId = message.senderId.value
-        val shortChatId = directChatIdFor(senderFullId)
+        val senderShortId = directChatIdFor(senderFullId)
 
-        val displayName = userIdToDisplayNameMap[shortChatId]?.let { DisplayName(it) }
+        shortUserIdToFullUserIdMap[senderShortId] = senderFullId
+
+        val displayName = shortUserIdToDisplayNameMap[senderShortId]?.let { DisplayName(it) }
         val chat = getOrCreateDirectChat(UserId(senderFullId), displayName)
 
         val normalizedMessage = message.copy(
-            chatId = ChatId(shortChatId)
+            chatId = ChatId(senderShortId)
         )
 
         messageDao.upsertMessage(normalizedMessage.toEntity())
-        updateChatMetadata(ChatId(shortChatId), normalizedMessage.body)
+        updateChatMetadata(ChatId(senderShortId), normalizedMessage.body)
 
         notificationHandler.showMessageNotification(
             message = normalizedMessage,
             senderName = chat.title
         )
+
+        Log.i(TAG, "Message received for me from=$senderFullId chatId=$senderShortId")
+    }
+
+    private fun updateChatTitleIfNecessary(chatId: String, newName: String) {
+        repositoryScope.launch {
+            val existing = chatDao.getChatById(chatId) ?: return@launch
+            if (existing.title == UNKNOWN_ID || existing.title == chatId) {
+                chatDao.upsertChat(existing.copy(title = newName))
+                Log.d(TAG, "Chat title updated to $newName for chatId=$chatId")
+            }
+        }
     }
 
     private suspend fun updateChatMetadata(chatId: ChatId, lastMessage: String) {
         val chat = chatDao.getChatById(chatId.value) ?: return
-        chatDao.upsertChat(chat.copy(lastMessagePreview = lastMessage, updatedAtEpochMillis = System.currentTimeMillis()))
+        chatDao.upsertChat(
+            chat.copy(
+                lastMessagePreview = lastMessage,
+                updatedAtEpochMillis = System.currentTimeMillis()
+            )
+        )
     }
 
     override suspend fun clearAllData() {
         chatDao.deleteAll()
         messageDao.deleteAll()
-        userIdToDeviceIdMap.clear()
-        userIdToDisplayNameMap.clear()
+        shortUserIdToDeviceIdMap.clear()
+        shortUserIdToFullUserIdMap.clear()
+        shortUserIdToDisplayNameMap.clear()
         seenMessageIds.clear()
     }
 
-    private fun encodeMessagePayload(destinationId: String, message: Message, ttl: Int): ByteArray {
-        return encodeWireMessage(WireMessage(destinationId, message.senderId.value, message.body, message.messageId.value, ttl, message.createdAtEpochMillis.epochMillis))
+    private suspend fun requireLocalUserId(): String? {
+        if (!localUserId.isNullOrBlank()) return localUserId
+        localUserId = identityRepository.getUserIdentity().firstOrNull()?.userId?.value
+        return localUserId
     }
 
-    private fun encodeWireMessage(wire: WireMessage): ByteArray = json.encodeToString(wire).toByteArray(Charsets.UTF_8)
+    private fun directChatIdFor(userId: String): String {
+        return userId.take(DIRECT_CHAT_ID_LENGTH)
+    }
+
+    private fun matchesLocalId(destinationId: String, localId: String?): Boolean {
+        if (destinationId == BROADCAST_ID) return true
+        if (localId.isNullOrBlank()) return false
+        return destinationId == localId || localId.startsWith(destinationId)
+    }
+
+    private fun encodeMessagePayload(
+        destinationId: String,
+        message: Message,
+        ttl: Int
+    ): ByteArray {
+        val wire = WireMessage(
+            destinationId = destinationId,
+            senderId = message.senderId.value,
+            body = message.body,
+            messageId = message.messageId.value,
+            ttl = ttl.coerceAtLeast(0),
+            createdAtEpochMillis = message.createdAtEpochMillis.epochMillis
+        )
+        return encodeWireMessage(wire)
+    }
+
+    private fun encodeWireMessage(wire: WireMessage): ByteArray {
+        return json.encodeToString(wire).toByteArray(Charsets.UTF_8)
+    }
 
     private fun decodeMessagePayload(data: ByteArray): WireMessage? {
-        return try { json.decodeFromString<WireMessage>(String(data, Charsets.UTF_8)) } catch (e: Exception) { null }
+        return try {
+            val raw = String(data, Charsets.UTF_8)
+            json.decodeFromString(WireMessage.serializer(), raw)
+        } catch (t: Throwable) {
+            Log.w(TAG, "decodeMessagePayload failed", t)
+            null
+        }
     }
 
     private fun trimSeenMessagesIfNeeded() {
-        if (seenMessageIds.size > MAX_SEEN_MESSAGES) seenMessageIds.entries.minByOrNull { it.value }?.let { seenMessageIds.remove(it.key) }
+        if (seenMessageIds.size <= MAX_SEEN_MESSAGES) return
+        val oldest = seenMessageIds.entries.minByOrNull { it.value } ?: return
+        seenMessageIds.remove(oldest.key)
     }
 }

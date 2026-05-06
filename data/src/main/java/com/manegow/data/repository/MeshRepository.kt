@@ -108,6 +108,7 @@ class MeshRepository(
         private const val TYPE_PUBKEY_RESP: Byte = 4
         private const val TYPE_ID_REQ: Byte = 5
         private const val TYPE_ID_RESP: Byte = 6
+        private const val IDENTITY_RETRY_MS = 15_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -116,6 +117,11 @@ class MeshRepository(
     private val adapter: BluetoothAdapter? = bluetoothManager?.adapter
     private val scanner: BluetoothLeScanner? = adapter?.bluetoothLeScanner
     private val advertiser: BluetoothLeAdvertiser? = adapter?.bluetoothLeAdvertiser
+
+    private val peersMap = ConcurrentHashMap<String, Peer>()
+
+    private val peerIdentityRequestsInFlight = ConcurrentHashMap<String, Boolean>()
+    private val peerIdentityLastAttemptAt = ConcurrentHashMap<String, Long>()
 
     private val peersState = MutableStateFlow<List<Peer>>(emptyList())
     private val incomingDataState = MutableSharedFlow<Pair<String, ByteArray>>(extraBufferCapacity = 256)
@@ -197,43 +203,83 @@ class MeshRepository(
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             val device = result?.device ?: return
             val record = result.scanRecord ?: return
-            val serviceData = record.getServiceData(SERVICE_PARCEL)
 
             val address = device.address ?: return
-            val shortUserId = serviceData?.decodeToString().orEmpty()
-            val resolvedUserId = if (shortUserId.isNotBlank()) shortUserId else "unknown"
             val now = System.currentTimeMillis()
+
+            val serviceData = record.getServiceData(SERVICE_PARCEL)
+            val advertisedShortUserId = serviceData
+                ?.decodeToString()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
 
             lastSeenMap[address] = now
 
-            peersState.update { current ->
-                val index = current.indexOfFirst { it.deviceId.value == address }
-                val peer = Peer(
-                    deviceId = DeviceId(address),
-                    userId = UserId(resolvedUserId),
-                    displayName = DisplayName(record.deviceName ?: resolvedUserId.ifBlank { address.takeLast(5) }),
-                    signalStrength = SignalStrength(result.rssi),
-                    status = PeerStatus.REACHABLE,
-                    lastSeen = Timestamp(now)
-                )
+            val previous = peersMap[address]
 
-                if (index == -1) current + peer
-                else current.toMutableList().also { it[index] = peer }
+            val resolvedUserId = when {
+                !advertisedShortUserId.isNullOrBlank() -> advertisedShortUserId
+                previous?.userId?.value?.isNotBlank() == true -> previous.userId?.value
+                else -> "unknown"
             }
 
+            val resolvedDisplayName = when {
+                !record.deviceName.isNullOrBlank() -> record.deviceName
+                previous?.displayName?.value?.isNotBlank() == true &&
+                        previous.displayName?.value != "unknown" -> previous.displayName?.value
+                resolvedUserId != "unknown" -> resolvedUserId
+                else -> address.takeLast(5)
+            }
+
+            val peer = Peer(
+                deviceId = DeviceId(address),
+                userId = UserId(resolvedUserId ?: return),
+                displayName = DisplayName(resolvedDisplayName ?: return),
+                signalStrength = SignalStrength(result.rssi),
+                status = PeerStatus.REACHABLE,
+                lastSeen = Timestamp(now)
+            )
+
+            peersMap[address] = peer
+
+            peersState.value = peersMap.values
+                .sortedByDescending { it.lastSeen.epochMillis }
+
             if (resolvedUserId == "unknown") {
-                scope.launch {
-                    val identity = fetchIdentity(address)
-                    if (identity != null) {
-                        peersState.update { current ->
-                            current.map {
-                                if (it.deviceId.value == address) {
-                                    it.copy(
+                val inFlight = peerIdentityRequestsInFlight[address] == true
+                val lastAttemptAt = peerIdentityLastAttemptAt[address] ?: 0L
+                val shouldRetry = (now - lastAttemptAt) >= IDENTITY_RETRY_MS
+
+                if (!inFlight && shouldRetry) {
+                    peerIdentityRequestsInFlight[address] = true
+                    peerIdentityLastAttemptAt[address] = now
+
+                    scope.launch {
+                        try {
+                            val identity = fetchIdentity(address)?.trim()
+
+                            if (!identity.isNullOrBlank() && identity != "unknown") {
+                                val current = peersMap[address]
+                                if (current != null) {
+                                    val updated = current.copy(
                                         userId = UserId(identity),
-                                        displayName = DisplayName(identity.take(12))
+                                        displayName = DisplayName(
+                                            current.displayName?.value
+                                                .takeIf { it?.isNotBlank() == true && it != "unknown" && it != address.takeLast(5) }
+                                                ?: identity.take(12)
+                                        ),
+                                        lastSeen = Timestamp(System.currentTimeMillis())
                                     )
-                                } else it
+
+                                    peersMap[address] = updated
+                                    peersState.value = peersMap.values
+                                        .sortedByDescending { it.lastSeen.epochMillis }
+                                }
                             }
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "fetchIdentity failed for $address", t)
+                        } finally {
+                            peerIdentityRequestsInFlight.remove(address)
                         }
                     }
                 }
@@ -588,12 +634,19 @@ class MeshRepository(
 
     private fun refreshPeerStatuses() {
         val now = System.currentTimeMillis()
-        peersState.update { current ->
-            current.filter { peer ->
-                val lastSeen = lastSeenMap[peer.deviceId.value] ?: 0L
-                now - lastSeen < PEER_STALE_MS
-            }
+
+        val expiredAddresses = peersMap.values
+            .filter { (now - it.lastSeen.epochMillis) >= PEER_STALE_MS }
+            .map { it.deviceId.value }
+
+        expiredAddresses.forEach { address ->
+            peersMap.remove(address)
+            lastSeenMap.remove(address)
+            peerIdentityRequestsInFlight.remove(address)
         }
+
+        peersState.value = peersMap.values
+            .sortedByDescending { it.lastSeen.epochMillis }
     }
 
     private fun evictOldAssemblies() {
