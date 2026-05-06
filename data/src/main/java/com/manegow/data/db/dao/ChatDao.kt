@@ -20,4 +20,7 @@ interface ChatDao {
 
     @Query("DELETE FROM chats")
     suspend fun deleteAll(): Int
+
+    @Query("DELETE FROM chats WHERE chatId = :chatId")
+    suspend fun deleteById(chatId: String): Int
 }

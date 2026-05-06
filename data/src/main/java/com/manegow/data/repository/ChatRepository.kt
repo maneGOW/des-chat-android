@@ -361,6 +361,14 @@ class ChatRepository(
         )
     }
 
+    override suspend fun deleteChat(chatId: ChatId) {
+        chatDao.deleteById(chatId.value)
+        messageDao.deleteByChatId(chatId.value)
+        shortUserIdToDeviceIdMap.remove(chatId.value)
+        shortUserIdToFullUserIdMap.remove(chatId.value)
+        shortUserIdToDisplayNameMap.remove(chatId.value)
+    }
+
     override suspend fun clearAllData() {
         chatDao.deleteAll()
         messageDao.deleteAll()
@@ -368,12 +376,6 @@ class ChatRepository(
         shortUserIdToFullUserIdMap.clear()
         shortUserIdToDisplayNameMap.clear()
         seenMessageIds.clear()
-    }
-
-    private suspend fun requireLocalUserId(): String? {
-        if (!localUserId.isNullOrBlank()) return localUserId
-        localUserId = identityRepository.getUserIdentity().firstOrNull()?.userId?.value
-        return localUserId
     }
 
     private fun directChatIdFor(userId: String): String {

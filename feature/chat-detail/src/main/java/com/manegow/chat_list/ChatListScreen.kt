@@ -14,15 +14,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.manegow.domain.usecase.chat.DeleteChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatsUseCase
 import com.manegow.model.chat.Chat
 import com.manegow.model.chat.ChatId
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -32,7 +35,8 @@ data class ChatListUiState(
 )
 
 class ChatListViewModel(
-    private val observeChatsUseCase: ObserveChatsUseCase
+    private val observeChatsUseCase: ObserveChatsUseCase,
+    private val deleteChatUseCase: DeleteChatUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatListUiState())
@@ -46,6 +50,12 @@ class ChatListViewModel(
             }
             .launchIn(viewModelScope)
     }
+
+    fun deleteChat(chatId: ChatId) {
+        viewModelScope.launch {
+            deleteChatUseCase(chatId)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,6 +66,34 @@ fun ChatListScreen(
     onDeleteChat: (ChatId) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var chatToDelete by remember { mutableStateOf<Chat?>(null) }
+
+    if (chatToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { chatToDelete = null },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text(text = "Eliminar conversación") },
+            text = { 
+                Text(text = "¿Estás seguro de que quieres eliminar el chat con \"${chatToDelete?.title}\"? Esta acción no se puede deshacer.") 
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        chatToDelete?.let { onDeleteChat(it.chatId) }
+                        chatToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Eliminar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { chatToDelete = null }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -107,7 +145,7 @@ fun ChatListScreen(
                         SwipeToDeleteChatItem(
                             chat = chat,
                             onClick = { onChatClick(chat.chatId, chat.title) },
-                            onDelete = { onDeleteChat(chat.chatId) },
+                            onDelete = { chatToDelete = chat },
                             modifier = Modifier.animateItem()
                         )
 
@@ -141,14 +179,11 @@ fun SwipeToDeleteChatItem(
                     androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
                 )
                 onDelete()
-                true
-            } else {
-                false
             }
+            false // Siempre retornamos false para que el item regrese a su sitio y el dialogo mande
         }
     )
 
-    val progress = dismissState.progress
     val backgroundColor by androidx.compose.animation.animateColorAsState(
         targetValue = when (dismissState.targetValue) {
             SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error.copy(alpha = 0.9f)
@@ -163,27 +198,52 @@ fun SwipeToDeleteChatItem(
         enableDismissFromStartToEnd = false,
         enableDismissFromEndToStart = true,
         backgroundContent = {
+            val alignment = Alignment.CenterEnd
+            val icon = Icons.Default.Delete
+            
+            val scale by androidx.compose.animation.core.animateFloatAsState(
+                if (dismissState.targetValue == SwipeToDismissBoxValue.Settled) 0.75f else 1.2f,
+                label = "iconScale"
+            )
+
             Box(
-                modifier = Modifier
+                Modifier
                     .fillMaxSize()
                     .background(backgroundColor)
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.CenterEnd
+                    .padding(horizontal = 24.dp),
+                contentAlignment = alignment
             ) {
-                Icon(
-                    imageVector = androidx.compose.material.icons.Icons.Default.Delete,
-                    contentDescription = "Eliminar chat",
-                    tint = MaterialTheme.colorScheme.onError,
-                    modifier = Modifier
-                        .size((20 + (8 * progress)).dp)
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        icon,
+                        contentDescription = "Eliminar",
+                        modifier = Modifier
+                            .size(28.dp)
+                            .graphicsLayer(scaleX = scale, scaleY = scale),
+                        tint = MaterialTheme.colorScheme.onError
+                    )
+                    Text(
+                        text = "Eliminar",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
     ) {
-        ChatItem(
-            chat = chat,
-            onClick = onClick
-        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.background // Fondo sólido para ocultar lo de atrás
+        ) {
+            ChatItem(
+                chat = chat,
+                onClick = onClick
+            )
+        }
     }
 }
 

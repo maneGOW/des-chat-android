@@ -34,6 +34,7 @@ import com.manegow.chat_list.ChatListScreen
 import com.manegow.chat_list.ChatListViewModel
 import com.manegow.domain.repository.ChatRepository
 import com.manegow.domain.repository.IdentityRepository
+import com.manegow.domain.usecase.chat.DeleteChatUseCase
 import com.manegow.domain.usecase.chat.GetOrCreateDirectChatUseCase
 import com.manegow.domain.usecase.chat.ObserveChatMessagesUseCase
 import com.manegow.domain.usecase.chat.ObserveChatsUseCase
@@ -70,6 +71,7 @@ fun AppNavHost(
     getOrCreateDirectChatUseCase: GetOrCreateDirectChatUseCase,
     observeChatMessagesUseCase: ObserveChatMessagesUseCase,
     observeChatsUseCase: ObserveChatsUseCase,
+    deleteChatUseCase: DeleteChatUseCase,
     sendMessageUseCase: SendMessageUseCase,
     initialChatToOpen: Pair<String, String?>? = null,
     onInitialChatOpened: () -> Unit = {}
@@ -165,7 +167,7 @@ fun AppNavHost(
 
             composable(route = CHATS_ROUTE) {
                 val chatListViewModel: ChatListViewModel = viewModel(
-                    factory = chatListViewModelFactory(observeChatsUseCase)
+                    factory = chatListViewModelFactory(observeChatsUseCase, deleteChatUseCase)
                 )
                 ChatListScreen(
                     viewModel = chatListViewModel,
@@ -178,7 +180,7 @@ fun AppNavHost(
                         )
                     },
                     onDeleteChat = { chatId ->
-                        deleteChat(chatId)
+                        chatListViewModel.deleteChat(chatId)
                     }
                 )
             }
@@ -248,10 +250,6 @@ private fun buildChatDetailRoute(
     return "$CHAT_DETAIL_ROUTE/$peerId?$ARG_PEER_NAME=$encodedName"
 }
 
-fun deleteChat(chatId: ChatId) {
-    println("Chat Id $chatId")
-}
-
 private fun chatDetailViewModelFactory(
     localUserId: UserId,
     peerId: String,
@@ -294,13 +292,14 @@ private fun settingsViewModelFactory(
 }
 
 private fun chatListViewModelFactory(
-    observeChatsUseCase: ObserveChatsUseCase
+    observeChatsUseCase: ObserveChatsUseCase,
+    deleteChatUseCase: DeleteChatUseCase
 ): ViewModelProvider.Factory {
     return object : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(ChatListViewModel::class.java)) {
-                return ChatListViewModel(observeChatsUseCase) as T
+                return ChatListViewModel(observeChatsUseCase, deleteChatUseCase) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
