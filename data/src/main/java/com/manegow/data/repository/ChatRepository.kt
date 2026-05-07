@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.util.Log
 import com.manegow.data.db.dao.ChatDao
 import com.manegow.data.db.dao.MessageDao
+import com.manegow.data.db.dao.RelayDao
+import com.manegow.data.db.entities.RelayMessageEntity
 import com.manegow.data.db.entities.toDomain
 import com.manegow.data.db.entities.toEntity
 import com.manegow.data.notifications.NotificationHandler
@@ -39,6 +41,7 @@ class ChatRepository(
     private val identityRepository: IdentityRepository,
     private val chatDao: ChatDao,
     private val messageDao: MessageDao,
+    private val relayDao: RelayDao,
     private val notificationHandler: NotificationHandler
 ) : ChatRepository {
 
@@ -65,23 +68,18 @@ class ChatRepository(
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
 
-    // device lookup por short id de chat (8 chars)
     private val shortUserIdToDeviceIdMap = ConcurrentHashMap<String, String>()
 
-    // relación short -> full uuid
     private val shortUserIdToFullUserIdMap = ConcurrentHashMap<String, String>()
 
-    // nombres por short id
     private val shortUserIdToDisplayNameMap = ConcurrentHashMap<String, String>()
 
-    // dedupe lógico por sender + messageId
     private val seenMessageIds = ConcurrentHashMap<String, Long>()
 
     @Volatile
     private var localUserId: String? = null
 
     init {
-        // Observar la identidad de forma reactiva
         repositoryScope.launch {
             identityRepository.getUserIdentity().collect { identity ->
                 localUserId = identity?.userId?.value
@@ -105,6 +103,8 @@ class ChatRepository(
                     val shortId = directChatIdFor(peerUserId)
                     shortUserIdToDeviceIdMap[shortId] = peer.deviceId.value
                     shortUserIdToFullUserIdMap[shortId] = peerUserId
+                    
+                    tryDeliverPendingRelays(peerUserId, peer.deviceId.value)
 
                     val name = peer.displayName?.value
                     if (!name.isNullOrBlank() && name != UNKNOWN_ID && name != shortId) {
@@ -305,7 +305,15 @@ class ChatRepository(
                     Log.d(TAG, "Message is for me: ${wire.messageId}")
                     processMessageForMe(message)
                 } else {
-                    Log.d(TAG, "Message is NOT for me: ${wire.messageId}")
+                    Log.d(TAG, "Message is for someone else, caching in relay bag: ${wire.destinationId}")
+                    relayDao.insert(RelayMessageEntity(
+                        messageId = wire.messageId,
+                        destinationId = wire.destinationId,
+                        senderId = wire.senderId,
+                        body = wire.body,
+                        createdAtEpochMillis = wire.createdAtEpochMillis,
+                        ttl = wire.ttl
+                    ))
                 }
 
                 if (wire.ttl > 0 && !isForMe) {
@@ -346,6 +354,32 @@ class ChatRepository(
         )
 
         Log.i(TAG, "Message received for me from=$senderFullId chatId=$senderShortId")
+    }
+
+    private suspend fun tryDeliverPendingRelays(fullDestId: String, deviceId: String) {
+        val shortId = directChatIdFor(fullDestId)
+        val pending = relayDao.getPendingFor(fullDestId) + relayDao.getPendingFor(shortId)
+        
+        if (pending.isNotEmpty()) {
+            Log.i(TAG, "Relay: Delivering ${pending.size} pending messages to $fullDestId")
+            pending.forEach { relay ->
+                try {
+                    val wire = WireMessage(
+                        destinationId = relay.destinationId,
+                        senderId = relay.senderId,
+                        body = relay.body,
+                        messageId = relay.messageId,
+                        ttl = relay.ttl,
+                        createdAtEpochMillis = relay.createdAtEpochMillis
+                    )
+                    meshRepository.sendData(deviceId, encodeWireMessage(wire))
+                    relayDao.deleteById(relay.messageId)
+                    Log.d(TAG, "Relay: Successfully delivered messageId=${relay.messageId}")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Relay: Could not deliver messageId=${relay.messageId} yet")
+                }
+            }
+        }
     }
 
     private fun updateChatTitleIfNecessary(chatId: String, newName: String) {

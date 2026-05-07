@@ -180,7 +180,7 @@ fun SwipeToDeleteChatItem(
                 )
                 onDelete()
             }
-            false // Siempre retornamos false para que el item regrese a su sitio y el dialogo mande
+            false
         }
     )
 
@@ -237,7 +237,7 @@ fun SwipeToDeleteChatItem(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.background // Fondo sólido para ocultar lo de atrás
+            color = MaterialTheme.colorScheme.background
         ) {
             ChatItem(
                 chat = chat,
