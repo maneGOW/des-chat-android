@@ -2,6 +2,7 @@ package com.manegow.data.crypto
 
 import android.util.Base64
 import java.security.*
+import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
@@ -12,7 +13,6 @@ class CryptographyManager {
 
     companion object {
         private const val ALGORITHM = "EC"
-        private const val CURVE = "secp256r1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val TAG_LENGTH = 128
         private const val IV_LENGTH = 12
@@ -34,7 +34,14 @@ class CryptographyManager {
         keyAgreement.doPhase(remotePublicKey, true)
         
         val secret = keyAgreement.generateSecret()
+        // Use the first 32 bytes for AES-256
         return SecretKeySpec(secret.take(32).toByteArray(), "AES")
+    }
+
+    fun stringToPrivateKey(privateKeyString: String): PrivateKey {
+        val privateKeyBytes = Base64.decode(privateKeyString, Base64.DEFAULT)
+        val keyFactory = KeyFactory.getInstance(ALGORITHM)
+        return keyFactory.generatePrivate(PKCS8EncodedKeySpec(privateKeyBytes))
     }
 
     fun encrypt(plainText: String, secretKey: SecretKeySpec): String {
@@ -44,7 +51,7 @@ class CryptographyManager {
         
         val cipherText = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
         val combined = iv + cipherText
-        return Base64.encodeToString(combined, Base64.DEFAULT)
+        return Base64.encodeToString(combined, Base64.NO_WRAP)
     }
 
     fun decrypt(encryptedBase64: String, secretKey: SecretKeySpec): String {

@@ -15,7 +15,8 @@ data class ChatEntity(
     val type: String,
     val participantIds: String,
     val lastMessagePreview: String?,
-    val updatedAtEpochMillis: Long
+    val updatedAtEpochMillis: Long,
+    val remotePublicKey: String?
 )
 
 fun ChatEntity.toDomain(): Chat {
@@ -25,7 +26,8 @@ fun ChatEntity.toDomain(): Chat {
         type = ChatType.valueOf(type),
         participantIds = participantIds.split(",").filter { it.isNotBlank() }.map { UserId(it) },
         lastMessagePreview = lastMessagePreview,
-        updatedAtEpochMillis = Timestamp(updatedAtEpochMillis)
+        updatedAtEpochMillis = Timestamp(updatedAtEpochMillis),
+        remotePublicKey = remotePublicKey
     )
 }
 
@@ -36,6 +38,7 @@ fun Chat.toEntity(): ChatEntity {
         type = type.name,
         participantIds = participantIds.joinToString(",") { it.value },
         lastMessagePreview = lastMessagePreview,
-        updatedAtEpochMillis = updatedAtEpochMillis.epochMillis
+        updatedAtEpochMillis = updatedAtEpochMillis.epochMillis,
+        remotePublicKey = remotePublicKey
     )
 }

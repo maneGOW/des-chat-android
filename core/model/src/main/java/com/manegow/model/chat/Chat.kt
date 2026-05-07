@@ -9,7 +9,8 @@ data class Chat(
     val type: ChatType,
     val participantIds: List<UserId>,
     val lastMessagePreview: String? = null,
-    val updatedAtEpochMillis: Timestamp
+    val updatedAtEpochMillis: Timestamp,
+    val remotePublicKey: String? = null
 ) {
     init {
         require(title.isNotBlank()) { "Chat title cannot be blank" }
