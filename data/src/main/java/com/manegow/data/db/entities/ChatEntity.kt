@@ -13,7 +13,7 @@ data class ChatEntity(
     @PrimaryKey val chatId: String,
     val title: String,
     val type: String,
-    val participantIds: String, // Comma separated IDs for simplicity in this version
+    val participantIds: String,
     val lastMessagePreview: String?,
     val updatedAtEpochMillis: Long
 )
