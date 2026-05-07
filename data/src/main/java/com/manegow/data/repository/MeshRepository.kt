@@ -257,7 +257,11 @@ class MeshRepository(
 
                     scope.launch {
                         try {
-                            val identity = fetchIdentity(address)?.trim()
+                            // Añadimos un pequeño retraso aleatorio para evitar que ambos
+                            // teléfonos intenten conectarse al mismo tiempo (Colisión)
+                            delay((500..2000).random().toLong())
+
+                            val fullIdentity = fetchIdentity(address)?.trim()?.lowercase()
 
                             if (!identity.isNullOrBlank() && identity != "unknown") {
                                 val current = peersMap[address]
@@ -290,6 +294,39 @@ class MeshRepository(
         override fun onScanFailed(errorCode: Int) {
             isScanning = false
             Log.e(TAG, "Scan failed errorCode=$errorCode")
+        }
+    }
+
+    private fun updatePeersState() {
+        val uniquePeers = peersMap.values
+            .groupBy { it.userId?.value?.lowercase() }
+            .flatMap { (id, peersWithSameId) ->
+                if (id == null || id == "unknown") {
+                    peersWithSameId
+                } else {
+                    // Si hay varios nodos con el mismo ID, nos quedamos con el que tiene mejor señal
+                    listOf(peersWithSameId.maxBy { it.signalStrength.rssi })
+                }
+            }
+            .sortedWith(
+                // ORDEN ESTABLE DEFINITIVO:
+                // 1. Primero los que tienen ID real (arriba), luego los "unknown" (abajo)
+                // 2. Dentro de cada grupo, orden alfabético por nombre
+                // 3. Como último recurso, por dirección MAC
+                compareByDescending<Peer> { it.userId?.value != "unknown" }
+                    .thenBy { it.displayName?.value?.lowercase() ?: "" }
+                    .thenBy { it.deviceId.value }
+            )
+
+        // Evitar parpadeo: Solo emitir si cambió algo más que el RSSI o el Timestamp
+        val currentList = peersState.value
+        val hasChanges = currentList.size != uniquePeers.size || 
+                         currentList.zip(uniquePeers).any { (old, new) -> 
+                             old.userId != new.userId || old.displayName != new.displayName 
+                         }
+
+        if (hasChanges || currentList.isEmpty()) {
+            peersState.value = uniquePeers
         }
     }
 
@@ -479,12 +516,17 @@ class MeshRepository(
             return
         }
 
-        // Observar la identidad de forma reactiva para evitar el bug de "unknown"
+        // 1. Primero cargamos la identidad de forma síncrona la primera vez
+        val initialIdentity = identityRepository.getUserIdentity().firstOrNull()
+        localUserId = initialIdentity?.userId?.value ?: "unknown"
+        Log.d(TAG, "Starting discovery with ID: $localUserId")
+
+        // 2. Luego activamos el observador para cambios futuros
         identityJob?.cancel()
         identityJob = scope.launch {
             identityRepository.getUserIdentity().collect { identity ->
                 val newId = identity?.userId?.value ?: "unknown"
-                if (newId != localUserId) {
+                if (newId != localUserId && newId != "unknown") {
                     val oldId = localUserId
                     localUserId = newId
                     Log.d(TAG, "Identity updated: $oldId -> $localUserId")
@@ -492,7 +534,7 @@ class MeshRepository(
                     // Si ya estamos anunciando, reiniciamos el anuncio con el nuevo ID
                     if (isAdvertising) {
                         stopAdvertisingInternal()
-                        delay(200)
+                        delay(300)
                         startAdvertisingInternal()
                     }
                 }
@@ -501,7 +543,11 @@ class MeshRepository(
 
         setupGattServer()
         startScanningInternal()
+        
+        // Esperamos un momento para que el servidor GATT esté listo antes de anunciar
+        delay(200)
         startAdvertisingInternal()
+
         startMaintenanceLoopsIfNeeded()
     }
 
