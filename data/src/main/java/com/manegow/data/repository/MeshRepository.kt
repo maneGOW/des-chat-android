@@ -98,7 +98,6 @@ class MeshRepository(
         private const val ATT_HEADER_BYTES = 3
 
         private const val MAX_ADVERTISED_USER_ID_BYTES = 8
-
         private const val PROTOCOL_VERSION: Byte = 1
         private const val HEADER_SIZE = 18
 
@@ -212,39 +211,42 @@ class MeshRepository(
             val advertisedShortUserId = serviceData
                 ?.decodeToString()
                 ?.trim()
-                ?.takeIf { it.isNotBlank() }
+                ?.take(MAX_ADVERTISED_USER_ID_BYTES)
+                ?.lowercase()
+                ?.takeIf { it.isNotBlank() && it != "unknown" }
 
             lastSeenMap[address] = now
-
             val previous = peersMap[address]
 
             val resolvedUserId = when {
                 !advertisedShortUserId.isNullOrBlank() -> advertisedShortUserId
-                previous?.userId?.value?.isNotBlank() == true -> previous.userId?.value
+                !record.deviceName.isNullOrBlank() && record.deviceName!!.length <= 12 && !record.deviceName!!.contains(":") -> {
+                    record.deviceName!!.lowercase().trim()
+                }
+                previous?.userId?.value != null && previous.userId?.value != "unknown" -> previous.userId?.value
                 else -> "unknown"
             }
 
             val resolvedDisplayName = when {
                 !record.deviceName.isNullOrBlank() -> record.deviceName
-                previous?.displayName?.value?.isNotBlank() == true &&
-                        previous.displayName?.value != "unknown" -> previous.displayName?.value
+                previous?.displayName?.value != null && 
+                        previous.displayName?.value != "unknown" &&
+                        previous.displayName?.value?.contains(":") == false -> previous.displayName?.value
                 resolvedUserId != "unknown" -> resolvedUserId
                 else -> address.takeLast(5)
             }
 
             val peer = Peer(
                 deviceId = DeviceId(address),
-                userId = UserId(resolvedUserId ?: return),
-                displayName = DisplayName(resolvedDisplayName ?: return),
+                userId = UserId(resolvedUserId!!),
+                displayName = DisplayName(resolvedDisplayName ?: "unknown"),
                 signalStrength = SignalStrength(result.rssi),
                 status = PeerStatus.REACHABLE,
                 lastSeen = Timestamp(now)
             )
 
             peersMap[address] = peer
-
-            peersState.value = peersMap.values
-                .sortedByDescending { it.lastSeen.epochMillis }
+            updatePeersState()
 
             if (resolvedUserId == "unknown") {
                 val inFlight = peerIdentityRequestsInFlight[address] == true
@@ -257,9 +259,10 @@ class MeshRepository(
 
                     scope.launch {
                         try {
-                            val identity = fetchIdentity(address)?.trim()
+                            val fullIdentity = fetchIdentity(address)?.trim()?.lowercase()
 
-                            if (!identity.isNullOrBlank() && identity != "unknown") {
+                            if (!fullIdentity.isNullOrBlank() && fullIdentity != "unknown") {
+                                val identity = fullIdentity.take(MAX_ADVERTISED_USER_ID_BYTES)
                                 val current = peersMap[address]
                                 if (current != null) {
                                     val updated = current.copy(
@@ -267,14 +270,13 @@ class MeshRepository(
                                         displayName = DisplayName(
                                             current.displayName?.value
                                                 .takeIf { it?.isNotBlank() == true && it != "unknown" && it != address.takeLast(5) }
-                                                ?: identity.take(12)
+                                                ?: identity
                                         ),
                                         lastSeen = Timestamp(System.currentTimeMillis())
                                     )
 
                                     peersMap[address] = updated
-                                    peersState.value = peersMap.values
-                                        .sortedByDescending { it.lastSeen.epochMillis }
+                                    updatePeersState()
                                 }
                             }
                         } catch (t: Throwable) {
@@ -291,6 +293,21 @@ class MeshRepository(
             isScanning = false
             Log.e(TAG, "Scan failed errorCode=$errorCode")
         }
+    }
+
+    private fun updatePeersState() {
+        val uniquePeers = peersMap.values
+            .groupBy { it.userId?.value?.lowercase() }
+            .flatMap { (id, peersWithSameId) ->
+                if (id == null || id == "unknown") {
+                    peersWithSameId
+                } else {
+                    listOf(peersWithSameId.maxBy { it.lastSeen.epochMillis })
+                }
+            }
+            .sortedByDescending { it.lastSeen.epochMillis }
+
+        peersState.value = uniquePeers
     }
 
     private val serverCallback = object : BluetoothGattServerCallback() {
@@ -479,7 +496,6 @@ class MeshRepository(
             return
         }
 
-        // Observar la identidad de forma reactiva para evitar el bug de "unknown"
         identityJob?.cancel()
         identityJob = scope.launch {
             identityRepository.getUserIdentity().collect { identity ->
@@ -489,7 +505,6 @@ class MeshRepository(
                     localUserId = newId
                     Log.d(TAG, "Identity updated: $oldId -> $localUserId")
                     
-                    // Si ya estamos anunciando, reiniciamos el anuncio con el nuevo ID
                     if (isAdvertising) {
                         stopAdvertisingInternal()
                         delay(200)

@@ -1,5 +1,6 @@
 package com.manegow.nearby
 
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -8,12 +9,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun NearbyRoute(
     viewModel: NearbyViewModel,
-    onPeerClicked: (peerId: String, peerName: String) -> Unit
+    navigateToChat: (peerId: String, peerName: String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    // Solo aseguramos que la búsqueda esté activa al entrar a esta pantalla
-    // Pero no la detenemos al salir, para permitir recibir mensajes en segundo plano
     LaunchedEffect(Unit) {
         viewModel.startDiscovery()
     }
@@ -22,9 +21,16 @@ fun NearbyRoute(
         uiState = uiState,
         onRetry = viewModel::retry,
         onPeerClicked = { peer ->
-            val peerId = peer.userId?.value ?: return@NearbyScreen
-            val peerName = peer.displayName?.value ?: "Dispositivo desconocido"
-            onPeerClicked(peerId, peerName)
+            val pId = peer.userId?.value?.lowercase()?.trim()
+            val pName = peer.displayName?.value ?: "Desconocido"
+            
+            Log.d("NearbyRoute", "Peer clicked: ID=$pId, Name=$pName")
+            
+            if (!pId.isNullOrBlank() && pId != "unknown") {
+                navigateToChat(pId, pName)
+            } else {
+                Log.w("NearbyRoute", "Ignoring click: ID is still unknown")
+            }
         }
     )
 }
