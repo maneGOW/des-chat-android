@@ -19,9 +19,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.manegow.data.db.AppDatabase
+import com.manegow.data.crypto.CryptographyManager
 import com.manegow.data.notifications.NotificationHandler
 import com.manegow.data.repository.DataStoreIdentityRepository
-import com.manegow.data.repository.ChatRepository
+import com.manegow.data.repository.RealChatRepository
 import com.manegow.data.repository.MeshRepository
 import com.manegow.deschat.navigation.AppNavHost
 import com.manegow.deschat.ui.theme.DesChatTheme
@@ -41,16 +42,19 @@ class MainActivity : ComponentActivity() {
 
     private val notificationHandler by lazy { NotificationHandler(applicationContext, identityRepository) }
 
+    private val cryptoManager by lazy { CryptographyManager() }
+
     private val database by lazy { AppDatabase.getDatabase(applicationContext) }
 
     private val chatRepository by lazy { 
-        ChatRepository(
+        RealChatRepository(
             meshRepository = meshRepository,
             identityRepository = identityRepository,
             chatDao = database.chatDao(),
             messageDao = database.messageDao(),
             relayDao = database.relayDao(),
-            notificationHandler = notificationHandler
+            notificationHandler = notificationHandler,
+            cryptoManager = cryptoManager
         ) 
     }
 

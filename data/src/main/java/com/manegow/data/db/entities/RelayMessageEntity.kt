@@ -11,5 +11,6 @@ data class RelayMessageEntity(
     val body: String,
     val createdAtEpochMillis: Long,
     val ttl: Int,
+    val isEncrypted: Boolean = false,
     val receivedAt: Long = System.currentTimeMillis()
 )

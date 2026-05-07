@@ -2,6 +2,7 @@ package com.manegow.data.repository
 
 import android.annotation.SuppressLint
 import android.util.Log
+import com.manegow.data.crypto.CryptographyManager
 import com.manegow.data.db.dao.ChatDao
 import com.manegow.data.db.dao.MessageDao
 import com.manegow.data.db.dao.RelayDao
@@ -12,13 +13,7 @@ import com.manegow.data.notifications.NotificationHandler
 import com.manegow.domain.repository.ChatRepository
 import com.manegow.domain.repository.IMeshRepository
 import com.manegow.domain.repository.IdentityRepository
-import com.manegow.model.chat.Chat
-import com.manegow.model.chat.ChatId
-import com.manegow.model.chat.ChatType
-import com.manegow.model.chat.Message
-import com.manegow.model.chat.MessageId
-import com.manegow.model.chat.MessageStatus
-import com.manegow.model.chat.MessageType
+import com.manegow.model.chat.*
 import com.manegow.model.common.DeliveryState
 import com.manegow.model.common.Timestamp
 import com.manegow.model.identity.DisplayName
@@ -36,13 +31,14 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-class ChatRepository(
+class RealChatRepository(
     private val meshRepository: IMeshRepository,
     private val identityRepository: IdentityRepository,
     private val chatDao: ChatDao,
     private val messageDao: MessageDao,
     private val relayDao: RelayDao,
-    private val notificationHandler: NotificationHandler
+    private val notificationHandler: NotificationHandler,
+    private val cryptoManager: CryptographyManager
 ) : ChatRepository {
 
     companion object {
@@ -62,7 +58,8 @@ class ChatRepository(
         val body: String,
         val messageId: String,
         val ttl: Int,
-        val createdAtEpochMillis: Long
+        val createdAtEpochMillis: Long,
+        val isEncrypted: Boolean = false
     )
 
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -74,16 +71,23 @@ class ChatRepository(
 
     private val shortUserIdToDisplayNameMap = ConcurrentHashMap<String, String>()
 
+    // Cache de llaves públicas remotas
+    private val shortUserIdToPublicKeyMap = ConcurrentHashMap<String, String>()
+
     private val seenMessageIds = ConcurrentHashMap<String, Long>()
 
     @Volatile
     private var localUserId: String? = null
+    
+    @Volatile
+    private var localPrivateKeyString: String? = null
 
     init {
         repositoryScope.launch {
             identityRepository.getUserIdentity().collect { identity ->
                 localUserId = identity?.userId?.value
-                Log.d(TAG, "Local identity updated: $localUserId")
+                localPrivateKeyString = identityRepository.getPrivateKey()
+                Log.d(TAG, "Local identity updated: $localUserId (Key present: ${localPrivateKeyString != null})")
             }
         }
 
@@ -104,6 +108,10 @@ class ChatRepository(
                     shortUserIdToDeviceIdMap[shortId] = peer.deviceId.value
                     shortUserIdToFullUserIdMap[shortId] = peerUserId
                     
+                    peer.publicKey?.let { pubKey ->
+                        shortUserIdToPublicKeyMap[shortId] = pubKey
+                    }
+
                     tryDeliverPendingRelays(peerUserId, peer.deviceId.value)
 
                     val name = peer.displayName?.value
@@ -145,7 +153,8 @@ class ChatRepository(
             type = ChatType.DIRECT,
             participantIds = listOf(UserId(fullPeerUserId)),
             lastMessagePreview = null,
-            updatedAtEpochMillis = Timestamp(System.currentTimeMillis())
+            updatedAtEpochMillis = Timestamp(System.currentTimeMillis()),
+            remotePublicKey = shortUserIdToPublicKeyMap[shortChatId]
         )
 
         chatDao.upsertChat(newChat.toEntity())
@@ -161,16 +170,48 @@ class ChatRepository(
             return
         }
 
+        // --- ENCRYPTION LOGIC ---
+        var encryptedBody = text
+        var isEncrypted = false
+
+        try {
+            val remotePubKey = shortUserIdToPublicKeyMap[resolvedChatId] 
+                ?: chatDao.getChatById(resolvedChatId)?.remotePublicKey
+                ?: meshRepository.fetchPublicKey(shortUserIdToDeviceIdMap[resolvedChatId] ?: "")
+
+            val privateKeyStr = localPrivateKeyString
+            
+            if (remotePubKey != null && privateKeyStr != null) {
+                val privKey = cryptoManager.stringToPrivateKey(privateKeyStr)
+                val sharedSecret = cryptoManager.getSharedSecret(privKey, remotePubKey)
+                encryptedBody = cryptoManager.encrypt(text, sharedSecret)
+                isEncrypted = true
+                Log.d(TAG, "Message encrypted for $resolvedChatId")
+                
+                // Cache the key for future use if it came from mesh
+                shortUserIdToPublicKeyMap[resolvedChatId] = remotePubKey
+                chatDao.getChatById(resolvedChatId)?.let {
+                    if (it.remotePublicKey == null) {
+                        chatDao.upsertChat(it.copy(remotePublicKey = remotePubKey))
+                    }
+                }
+            } else {
+                Log.w(TAG, "Sending unencrypted message (Keys missing: Remote=${remotePubKey!=null}, LocalPriv=${privateKeyStr!=null})")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Encryption failed, sending plain text", e)
+        }
+
         val message = Message(
             messageId = MessageId(UUID.randomUUID().toString()),
             chatId = ChatId(resolvedChatId),
             senderId = UserId(resolvedSenderId),
             type = MessageType.TEXT,
-            body = text,
+            body = text, // Store plain text locally
             createdAtEpochMillis = Timestamp(System.currentTimeMillis()),
             deliveryState = DeliveryState.QUEUED,
             status = MessageStatus.SENT_TO_MESH,
-            isEncrypted = false
+            isEncrypted = isEncrypted
         )
 
         messageDao.upsertMessage(message.toEntity())
@@ -178,10 +219,11 @@ class ChatRepository(
 
         repositoryScope.launch {
             try {
+                val wireBody = if (isEncrypted) encryptedBody else text
                 val payload = encodeMessagePayload(
                     destinationId = resolvedChatId,
-                    message = message,
-                    ttl = DEFAULT_TTL
+                    message = message.copy(body = wireBody),
+                    isEncrypted = isEncrypted
                 )
 
                 val directDeviceId = shortUserIdToDeviceIdMap[resolvedChatId]
@@ -289,16 +331,51 @@ class ChatRepository(
                 val destinationId = wire.destinationId.lowercase()
                 val isForMe = matchesLocalId(destinationId, me)
 
+                // --- DECRYPTION LOGIC ---
+                var finalBody = wire.body
+                if (wire.isEncrypted && isForMe) {
+                    try {
+                        val remotePubKey = shortUserIdToPublicKeyMap[senderShortId]
+                            ?: meshRepository.fetchPublicKey(deviceId)
+                            ?: chatDao.getChatById(senderShortId)?.remotePublicKey
+
+                        val privateKeyStr = localPrivateKeyString
+                        
+                        if (remotePubKey != null && privateKeyStr != null) {
+                            val privKey = cryptoManager.stringToPrivateKey(privateKeyStr)
+                            val sharedSecret = cryptoManager.getSharedSecret(privKey, remotePubKey)
+                            finalBody = cryptoManager.decrypt(wire.body, sharedSecret)
+                            Log.d(TAG, "Message decrypted from $senderShortId")
+                            
+                            // Save remote key if we didn't have it
+                            if (shortUserIdToPublicKeyMap[senderShortId] == null) {
+                                shortUserIdToPublicKeyMap[senderShortId] = remotePubKey
+                                chatDao.getChatById(senderShortId)?.let {
+                                    if (it.remotePublicKey == null) {
+                                        chatDao.upsertChat(it.copy(remotePublicKey = remotePubKey))
+                                    }
+                                }
+                            }
+                        } else {
+                            Log.w(TAG, "Could not decrypt message: Keys missing")
+                            finalBody = "[Mensaje cifrado]"
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Decryption failed", e)
+                        finalBody = "[Error al descifrar]"
+                    }
+                }
+
                 val message = Message(
                     messageId = MessageId(wire.messageId),
                     chatId = ChatId(senderShortId),
                     senderId = UserId(senderFullId),
                     type = MessageType.TEXT,
-                    body = wire.body,
+                    body = finalBody,
                     createdAtEpochMillis = Timestamp(wire.createdAtEpochMillis),
                     deliveryState = DeliveryState.DELIVERED,
                     status = MessageStatus.READ,
-                    isEncrypted = false
+                    isEncrypted = wire.isEncrypted
                 )
 
                 if (isForMe) {
@@ -312,7 +389,8 @@ class ChatRepository(
                         senderId = wire.senderId,
                         body = wire.body,
                         createdAtEpochMillis = wire.createdAtEpochMillis,
-                        ttl = wire.ttl
+                        ttl = wire.ttl,
+                        isEncrypted = wire.isEncrypted
                     ))
                 }
 
@@ -370,7 +448,8 @@ class ChatRepository(
                         body = relay.body,
                         messageId = relay.messageId,
                         ttl = relay.ttl,
-                        createdAtEpochMillis = relay.createdAtEpochMillis
+                        createdAtEpochMillis = relay.createdAtEpochMillis,
+                        isEncrypted = relay.isEncrypted
                     )
                     meshRepository.sendData(deviceId, encodeWireMessage(wire))
                     relayDao.deleteById(relay.messageId)
@@ -434,15 +513,16 @@ class ChatRepository(
     private fun encodeMessagePayload(
         destinationId: String,
         message: Message,
-        ttl: Int
+        isEncrypted: Boolean = false
     ): ByteArray {
         val wire = WireMessage(
             destinationId = destinationId,
             senderId = message.senderId.value,
             body = message.body,
             messageId = message.messageId.value,
-            ttl = ttl.coerceAtLeast(0),
-            createdAtEpochMillis = message.createdAtEpochMillis.epochMillis
+            ttl = DEFAULT_TTL,
+            createdAtEpochMillis = message.createdAtEpochMillis.epochMillis,
+            isEncrypted = isEncrypted
         )
         return encodeWireMessage(wire)
     }
