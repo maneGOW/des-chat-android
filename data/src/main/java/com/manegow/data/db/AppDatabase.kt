@@ -6,13 +6,16 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.manegow.data.db.dao.ChatDao
 import com.manegow.data.db.dao.MessageDao
+import com.manegow.data.db.dao.RelayDao
 import com.manegow.data.db.entities.ChatEntity
 import com.manegow.data.db.entities.MessageEntity
+import com.manegow.data.db.entities.RelayMessageEntity
 
-@Database(entities = [ChatEntity::class, MessageEntity::class], version = 1)
+@Database(entities = [ChatEntity::class, MessageEntity::class, RelayMessageEntity::class], version = 1)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun messageDao(): MessageDao
+    abstract fun relayDao(): RelayDao
 
     companion object {
         @Volatile

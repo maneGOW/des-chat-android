@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
             identityRepository = identityRepository,
             chatDao = database.chatDao(),
             messageDao = database.messageDao(),
+            relayDao = database.relayDao(),
             notificationHandler = notificationHandler
         ) 
     }

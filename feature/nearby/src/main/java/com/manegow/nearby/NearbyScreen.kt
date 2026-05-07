@@ -179,7 +179,6 @@ private fun RadarAnimation() {
         modifier = Modifier.size(200.dp),
         contentAlignment = Alignment.Center
     ) {
-        // Círculos de expansión
         Box(
             modifier = Modifier
                 .size((radius * 2).dp)
@@ -188,7 +187,6 @@ private fun RadarAnimation() {
                     shape = CircleShape
                 )
         )
-        // Icono central
         Surface(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primaryContainer,

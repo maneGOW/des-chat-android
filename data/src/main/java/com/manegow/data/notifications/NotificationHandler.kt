@@ -41,7 +41,6 @@ class NotificationHandler(
     suspend fun showMessageNotification(message: Message, senderName: String) {
         val settings = identityRepository.observeSettings().firstOrNull() ?: return
         
-        // Respetar los ajustes del usuario
         if (!settings.notificationsEnabled) return
 
         val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
@@ -58,7 +57,7 @@ class NotificationHandler(
         )
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_chat) // Icono temporal
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(senderName)
             .setContentText(message.body)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

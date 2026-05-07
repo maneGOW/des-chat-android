@@ -89,12 +89,10 @@ class DataStoreIdentityRepository(private val context: Context) : IdentityReposi
 
     override suspend fun saveDisplayName(displayName: DisplayName) {
         context.dataStore.edit { preferences ->
-            // Si es la primera vez, generamos los IDs
             if (preferences[PreferencesKeys.DEVICE_ID] == null) {
                 preferences[PreferencesKeys.DEVICE_ID] = UUID.randomUUID().toString()
                 preferences[PreferencesKeys.USER_ID] = UUID.randomUUID().toString()
                 
-                // Generar llaves para cifrado
                 val crypto = CryptographyManager()
                 val keyPair = crypto.generateKeyPair()
                 preferences[PreferencesKeys.PUBLIC_KEY] = android.util.Base64.encodeToString(keyPair.public.encoded, android.util.Base64.DEFAULT)
