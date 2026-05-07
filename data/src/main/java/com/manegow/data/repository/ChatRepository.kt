@@ -128,11 +128,12 @@ class ChatRepository(
         peerUserId: UserId,
         peerDisplayName: DisplayName?
     ): Chat {
-        val shortChatId = directChatIdFor(peerUserId.value)
+        val shortChatId = directChatIdFor(peerUserId.value).lowercase()
         val existing = chatDao.getChatById(shortChatId)
         if (existing != null) return existing.toDomain()
 
-        shortUserIdToFullUserIdMap[shortChatId] = peerUserId.value
+        val fullPeerUserId = peerUserId.value.lowercase()
+        shortUserIdToFullUserIdMap[shortChatId] = fullPeerUserId
 
         val resolvedName = peerDisplayName?.value
             ?: shortUserIdToDisplayNameMap[shortChatId]
@@ -142,7 +143,7 @@ class ChatRepository(
             chatId = ChatId(shortChatId),
             title = resolvedName,
             type = ChatType.DIRECT,
-            participantIds = listOf(peerUserId),
+            participantIds = listOf(UserId(fullPeerUserId)),
             lastMessagePreview = null,
             updatedAtEpochMillis = Timestamp(System.currentTimeMillis())
         )
@@ -152,8 +153,8 @@ class ChatRepository(
     }
 
     override suspend fun sendMessage(chatId: ChatId, senderId: UserId, text: String) {
-        val resolvedChatId = chatId.value
-        val resolvedSenderId = senderId.value
+        val resolvedChatId = chatId.value.lowercase()
+        val resolvedSenderId = senderId.value.lowercase()
 
         if (resolvedChatId.isBlank() || resolvedChatId == UNKNOWN_ID) {
             Log.w(TAG, "Refusing to send message with invalid destinationId=$resolvedChatId")
@@ -241,7 +242,7 @@ class ChatRepository(
                     return@launch
                 }
                 
-                val me = localUserId ?: identityRepository.getUserIdentity().firstOrNull()?.userId?.value
+                val me = (localUserId ?: identityRepository.getUserIdentity().firstOrNull()?.userId?.value)?.lowercase()
                 
                 Log.d(
                     TAG,
@@ -256,12 +257,13 @@ class ChatRepository(
                     return@launch
                 }
 
-                if (wire.senderId.isBlank() || wire.senderId == UNKNOWN_ID) {
+                val senderFullId = wire.senderId.lowercase()
+                if (senderFullId.isBlank() || senderFullId == UNKNOWN_ID) {
                     Log.w(TAG, "Dropping message with invalid senderId messageId=${wire.messageId}")
                     return@launch
                 }
 
-                val dedupeKey = "${wire.senderId}:${wire.messageId}"
+                val dedupeKey = "${senderFullId}:${wire.messageId}"
                 val inserted = seenMessageIds.putIfAbsent(
                     dedupeKey,
                     System.currentTimeMillis()
@@ -274,22 +276,23 @@ class ChatRepository(
 
                 trimSeenMessagesIfNeeded()
 
-                val senderShortId = directChatIdFor(wire.senderId)
+                val senderShortId = directChatIdFor(senderFullId)
                 shortUserIdToDeviceIdMap[senderShortId] = deviceId
-                shortUserIdToFullUserIdMap[senderShortId] = wire.senderId
+                shortUserIdToFullUserIdMap[senderShortId] = senderFullId
 
-                val isOwnLoopedMessage = me != null && wire.senderId == me
+                val isOwnLoopedMessage = me != null && senderFullId == me
                 if (isOwnLoopedMessage) {
                     Log.d(TAG, "Dropping looped own messageId=${wire.messageId}")
                     return@launch
                 }
 
-                val isForMe = matchesLocalId(wire.destinationId, me)
+                val destinationId = wire.destinationId.lowercase()
+                val isForMe = matchesLocalId(destinationId, me)
 
                 val message = Message(
                     messageId = MessageId(wire.messageId),
                     chatId = ChatId(senderShortId),
-                    senderId = UserId(wire.senderId),
+                    senderId = UserId(senderFullId),
                     type = MessageType.TEXT,
                     body = wire.body,
                     createdAtEpochMillis = Timestamp(wire.createdAtEpochMillis),
@@ -308,7 +311,11 @@ class ChatRepository(
                 if (wire.ttl > 0 && !isForMe) {
                     val nextTtl = wire.ttl - 1
                     Log.d(TAG, "Relaying messageId=${wire.messageId} ttl=$nextTtl")
-                    val relayedPayload = encodeWireMessage(wire.copy(ttl = nextTtl))
+                    val relayedPayload = encodeWireMessage(wire.copy(
+                        destinationId = destinationId,
+                        senderId = senderFullId,
+                        ttl = nextTtl
+                    ))
                     floodNetwork(relayedPayload, excludeDeviceIds = setOf(deviceId))
                 }
             } catch (t: Throwable) {
@@ -379,13 +386,15 @@ class ChatRepository(
     }
 
     private fun directChatIdFor(userId: String): String {
-        return userId.take(DIRECT_CHAT_ID_LENGTH)
+        return userId.trim().lowercase().take(DIRECT_CHAT_ID_LENGTH)
     }
 
     private fun matchesLocalId(destinationId: String, localId: String?): Boolean {
         if (destinationId == BROADCAST_ID) return true
         if (localId.isNullOrBlank()) return false
-        return destinationId == localId || localId.startsWith(destinationId)
+        val dest = destinationId.lowercase()
+        val me = localId.lowercase()
+        return dest == me || me.startsWith(dest)
     }
 
     private fun encodeMessagePayload(

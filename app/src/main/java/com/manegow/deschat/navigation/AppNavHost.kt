@@ -83,17 +83,14 @@ fun AppNavHost(
         OnboardingRoute(
             identityRepository = identityRepository
         ) {
-            // El login cambiará userIdentity y recargará este bloque
         }
         return
     }
 
     val localUserId = userIdentity!!.userId
 
-    // Manejar la navegación inicial por notificación una vez que el usuario está listo
     LaunchedEffect(initialChatToOpen) {
         initialChatToOpen?.let { (chatId, chatName) ->
-            // Pequeño delay para asegurar que el NavHost ya se compuso y tiene el grafo listo
             delay(100)
             navController.navigate(buildChatDetailRoute(chatId, chatName))
             onInitialChatOpened()
@@ -154,13 +151,10 @@ fun AppNavHost(
             composable(route = NEARBY_ROUTE) {
                 NearbyRoute(
                     viewModel = nearbyViewModel,
-                    onPeerClicked = { userId, name ->
-                        navController.navigate(
-                            route = buildChatDetailRoute(
-                                peerId = userId,
-                                peerName = name
-                            )
-                        )
+                    navigateToChat = { userId, name ->
+                        val route = buildChatDetailRoute(userId, name)
+                        android.util.Log.d("AppNavHost", "Navigating to: $route")
+                        navController.navigate(route)
                     }
                 )
             }
