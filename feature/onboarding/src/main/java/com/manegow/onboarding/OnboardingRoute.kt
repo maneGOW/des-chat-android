@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModelProvider
 @Composable
 fun OnboardingRoute(
     identityRepository: IdentityRepository,
+    permissionsGranted: Boolean,
+    onRequestPermissions: () -> Unit,
     onFinished: () -> Unit
 ) {
     val onboardingViewModel: OnboardingViewModel = viewModel(
@@ -17,6 +19,8 @@ fun OnboardingRoute(
 
     OnboardingScreen(
         viewModel = onboardingViewModel,
+        permissionsGranted = permissionsGranted,
+        onRequestPermissions = onRequestPermissions,
         onFinished = onFinished
     )
 }

@@ -38,6 +38,8 @@ import com.manegow.model.identity.AvatarId
 @Composable
 fun OnboardingScreen(
     viewModel: OnboardingViewModel,
+    permissionsGranted: Boolean,
+    onRequestPermissions: () -> Unit,
     onFinished: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -68,6 +70,8 @@ fun OnboardingScreen(
                     )
 
                     OnboardingUiState.Permissions -> PermissionsStep(
+                        permissionsGranted = permissionsGranted,
+                        onRequestPermissions = onRequestPermissions,
                         onNext = viewModel::onNextClicked
                     )
 
@@ -116,6 +120,8 @@ private fun IntroStep(
 
 @Composable
 private fun PermissionsStep(
+    permissionsGranted: Boolean,
+    onRequestPermissions: () -> Unit,
     onNext: () -> Unit
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -138,7 +144,14 @@ private fun PermissionsStep(
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(32.dp))
-        Button(onClick = onNext) {
+        Button(onClick = onRequestPermissions, enabled = !permissionsGranted) {
+            Text(if(permissionsGranted)"Permisos concedidos" else "Conceder permisos")
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = onNext,
+            enabled = permissionsGranted
+            ) {
             Text("Entendido")
         }
     }

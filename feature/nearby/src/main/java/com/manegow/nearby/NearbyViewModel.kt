@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class NearbyViewModel(
@@ -31,31 +32,47 @@ class NearbyViewModel(
 
         observeJob = viewModelScope.launch {
             observeNearbyPeersUseCase().collect { peers ->
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    nearbyPeers = peers,
-                    error = null
-                )
+                _uiState.update {
+                    it.copy(
+                        isLoading =  false,
+                        nearbyPeers = peers,
+                        error = null
+                    )
+                }
             }
         }
     }
 
+    fun onPermissionsGranted() {
+        _uiState.update {
+            it.copy(error = null)
+        }
+        startDiscovery()
+    }
+
     fun startDiscovery() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isLoading = true,
-                error = null
-            )
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    error = null,
+                )
+            }
 
             runCatching {
                 startPeerDiscoveryUseCase()
             }.onSuccess {
-                _uiState.value = _uiState.value.copy(isLoading = false)
-            }.onFailure { throwable ->
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     isLoading = false,
-                    error = throwable.message ?: "Unknown error"
-                )
+                    error = null,
+                ) }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = throwable.message ?: "Unknown error"
+                    )
+                }
             }
         }
     }

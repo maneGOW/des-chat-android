@@ -18,6 +18,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import com.manegow.data.db.AppDatabase
 import com.manegow.data.crypto.CryptographyManager
 import com.manegow.data.notifications.NotificationHandler
@@ -45,6 +48,8 @@ class MainActivity : ComponentActivity() {
     private val cryptoManager by lazy { CryptographyManager() }
 
     private val database by lazy { AppDatabase.getDatabase(applicationContext) }
+
+    private var permissionsGranted by mutableStateOf(false)
 
     private val chatRepository by lazy { 
         RealChatRepository(
@@ -105,12 +110,20 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val granted = permissions.values.all { it }
-        if (granted) {
+    ) {
+        permissionsGranted = hasRequiredPermissions()
+        if (permissionsGranted) {
             ensureBluetoothEnabled()
-            nearbyViewModel.startDiscovery()
+            nearbyViewModel.onPermissionsGranted()
+        } else {
+            Log.d("MainActivity", "Permissions denied")
         }
+    }
+
+    private fun missingPermissions(): Array<String> {
+        return requiredPermissions().filter { permission ->
+            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
     }
 
     private val enableBluetoothLauncher = registerForActivityResult(
@@ -118,8 +131,9 @@ class MainActivity : ComponentActivity() {
     ) { result ->
         when (result.resultCode) {
             RESULT_OK -> {
-                nearbyViewModel.startDiscovery()
-                recreate()
+                if(bluetoothAdapter?.isEnabled == true) {
+                    nearbyViewModel.onPermissionsGranted()
+                }
             }
             RESULT_CANCELED -> {
                 Log.d("MainActivity", "Bluetooth enable cancelled")
@@ -132,16 +146,24 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         handleIntent(intent)
+        permissionsGranted = hasRequiredPermissions()
 
-        when {
-            !hasRequiredPermissions() -> {
-                permissionLauncher.launch(requiredPermissions())
-            }
-            else -> {
-                ensureBluetoothEnabled()
-                nearbyViewModel.startDiscovery()
+        lifecycleScope.launch {
+            identityRepository.getUserIdentity().collectLatest { identity ->
+                if (identity != null) {
+                    Log.d("MainActivity", "User registered, checking permissions and starting discovery")
+                    if(hasRequiredPermissions()) {
+                        ensureBluetoothEnabled()
+                        nearbyViewModel.onPermissionsGranted()
+                    }
+                } else {
+                    Log.d("MainActivity", "User not registered, stopping discovery")
+                    nearbyViewModel.stopDiscovery()
+                }
             }
         }
+
+
         setContent {
             DesChatTheme {
                 AppNavHost(
@@ -153,6 +175,8 @@ class MainActivity : ComponentActivity() {
                     observeChatsUseCase = observeChatsUseCase,
                     deleteChatUseCase = deleteChatUseCase,
                     sendMessageUseCase = sendMessageUseCase,
+                    onRequestPermissions = ::requestNearbyPermissions,
+                    permissionsGranted = permissionsGranted,
                     initialChatToOpen = initialChatToOpen,
                     onInitialChatOpened = { initialChatToOpen = null }
                 )
@@ -174,8 +198,39 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasRequiredPermissions(): Boolean {
-        return requiredPermissions().all { permission ->
+        return requiredNearbyPermissions().all { permission ->
             ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requiredNearbyPermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+        }
+    }
+
+    private fun requestNearbyPermissions() {
+        permissionsGranted = hasRequiredPermissions()
+
+        if(permissionsGranted) {
+            ensureBluetoothEnabled()
+            nearbyViewModel.onPermissionsGranted()
+            return
+        }
+
+        val missing = missingPermissions()
+        if(missing.isNotEmpty()) {
+            permissionLauncher.launch(missing)
+        } else {
+            permissionsGranted = hasRequiredPermissions()
         }
     }
 
