@@ -73,6 +73,8 @@ fun AppNavHost(
     observeChatsUseCase: ObserveChatsUseCase,
     deleteChatUseCase: DeleteChatUseCase,
     sendMessageUseCase: SendMessageUseCase,
+    permissionsGranted: Boolean,
+    onRequestPermissions: () -> Unit,
     initialChatToOpen: Pair<String, String?>? = null,
     onInitialChatOpened: () -> Unit = {}
 ) {
@@ -81,7 +83,9 @@ fun AppNavHost(
 
     if (userIdentity == null) {
         OnboardingRoute(
-            identityRepository = identityRepository
+            identityRepository = identityRepository,
+            permissionsGranted = permissionsGranted,
+            onRequestPermissions = onRequestPermissions,
         ) {
         }
         return
@@ -140,7 +144,9 @@ fun AppNavHost(
         ) {
             composable(route = ONBOARDING_ROUTE) {
                 OnboardingRoute(
-                    identityRepository = identityRepository
+                    identityRepository = identityRepository,
+                    permissionsGranted = permissionsGranted,
+                    onRequestPermissions = onRequestPermissions
                 ) {
                     navController.navigate(NEARBY_ROUTE) {
                         popUpTo(ONBOARDING_ROUTE) { inclusive = true }

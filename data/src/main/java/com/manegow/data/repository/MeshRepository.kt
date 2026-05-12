@@ -29,7 +29,6 @@ import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.manegow.domain.repository.IdentityRepository
-import com.manegow.domain.repository.IMeshRepository as MeshRepositoryContract
 import com.manegow.model.common.Timestamp
 import com.manegow.model.identity.DeviceId
 import com.manegow.model.identity.DisplayName
@@ -51,19 +50,22 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import com.manegow.domain.repository.IMeshRepository as MeshRepositoryContract
 
 @SuppressLint("MissingPermission", "HardwareIds")
 class MeshRepository(
@@ -107,8 +109,20 @@ class MeshRepository(
         private const val TYPE_PUBKEY_RESP: Byte = 4
         private const val TYPE_ID_REQ: Byte = 5
         private const val TYPE_ID_RESP: Byte = 6
+        private const val TYPE_HANDSHAKE: Byte = 7
         private const val IDENTITY_RETRY_MS = 15_000L
     }
+
+    @SuppressLint("UnsafeOptInUsageError")
+    @Serializable
+    private data class PeerHandshake(
+        val userId: String,
+        val displayName: String,
+        val avatarId: String,
+        val publicKey: String? = null
+    )
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -248,7 +262,7 @@ class MeshRepository(
             peersMap[address] = peer
             updatePeersState()
 
-            if (resolvedUserId == "unknown") {
+            if (resolvedUserId == "unknown" || peer.avatarId == null) {
                 val inFlight = peerIdentityRequestsInFlight[address] == true
                 val lastAttemptAt = peerIdentityLastAttemptAt[address] ?: 0L
                 val shouldRetry = (now - lastAttemptAt) >= IDENTITY_RETRY_MS
@@ -259,30 +273,17 @@ class MeshRepository(
 
                     scope.launch {
                         try {
-                            delay((500..2000).random().toLong())
-
-                            val fullIdentity = fetchIdentity(address)?.trim()?.lowercase()
-
-                            if (!fullIdentity.isNullOrBlank() && fullIdentity != "unknown") {
-                                val identity = fullIdentity.take(MAX_ADVERTISED_USER_ID_BYTES)
-                                val current = peersMap[address]
-                                if (current != null) {
-                                    val updated = current.copy(
-                                        userId = UserId(identity),
-                                        displayName = DisplayName(
-                                            current.displayName?.value
-                                                .takeIf { it?.isNotBlank() == true && it != "unknown" && it != address.takeLast(5) }
-                                                ?: identity
-                                        ),
-                                        lastSeen = Timestamp(System.currentTimeMillis())
-                                    )
-
-                                    peersMap[address] = updated
-                                    updatePeersState()
-                                }
+                            // Regla de Oro: Solo el UUID mayor inicia el Handshake para evitar choques
+                            val me = identityRepository.getUserIdentity().firstOrNull()?.userId?.value ?: "unknown"
+                            if (me > resolvedUserId) {
+                                Log.d(TAG, "Handshake: I am the initiator ($me > $resolvedUserId)")
+                                delay((500..2000).random().toLong())
+                                sendHandshake(address)
+                            } else {
+                                Log.d(TAG, "Handshake: Waiting for peer to initiate ($me <= $resolvedUserId)")
                             }
                         } catch (t: Throwable) {
-                            Log.w(TAG, "fetchIdentity failed for $address", t)
+                            Log.w(TAG, "Handshake failed for $address", t)
                         } finally {
                             peerIdentityRequestsInFlight.remove(address)
                         }
@@ -1109,6 +1110,51 @@ class MeshRepository(
                 Log.d(TAG, "ID_RESP received from=$deviceId payload=${frame.payload.decodeToString()}")
             }
 
+            TYPE_HANDSHAKE -> {
+                try {
+                    val handshake = json.decodeFromString<PeerHandshake>(frame.payload.decodeToString())
+                    val address = deviceId
+                    val previous = peersMap[address]
+                    
+                    val updated = (previous ?: Peer(
+                        deviceId = DeviceId(address),
+                        userId = UserId(handshake.userId),
+                        displayName = DisplayName(handshake.displayName),
+                        signalStrength = SignalStrength(0),
+                        status = PeerStatus.REACHABLE,
+                        lastSeen = Timestamp(System.currentTimeMillis())
+                    )).copy(
+                        userId = UserId(handshake.userId),
+                        displayName = DisplayName(handshake.displayName),
+                        avatarId = com.manegow.model.identity.AvatarId.valueOf(handshake.avatarId),
+                        publicKey = handshake.publicKey,
+                        lastSeen = Timestamp(System.currentTimeMillis())
+                    )
+
+                    peersMap[address] = updated
+                    updatePeersState()
+                    Log.i(TAG, "Handshake received from ${handshake.displayName}")
+
+                    // Si recibimos un handshake, respondemos con el nuestro para completar el intercambio bilateral
+                    scope.launch {
+                        val me = identityRepository.getUserIdentity().firstOrNull() ?: return@launch
+                        val myHandshake = PeerHandshake(
+                            userId = me.userId.value,
+                            displayName = me.displayName.value,
+                            avatarId = me.avatarId.name,
+                            publicKey = me.publicKey
+                        )
+                        val payload = json.encodeToString(myHandshake).toByteArray()
+                        
+                        // Enviamos de vuelta usando el sistema de ráfaga
+                        val responseFrame = encodeFrame(TYPE_HANDSHAKE, frame.messageId, 0, 1, payload)
+                        sendFrameBackToSubscriber(deviceId, responseFrame)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse handshake from $deviceId", e)
+                }
+            }
+
             TYPE_DATA -> {
                 val totalChunks = frame.totalChunks.toInt()
                 val chunkIndex = frame.chunkIndex.toInt()
@@ -1351,28 +1397,37 @@ class MeshRepository(
         return result
     }
 
-    private suspend fun fetchIdentity(deviceId: String): String? {
-        val ctx = getOrCreateConnection(deviceId) ?: return null
+    private suspend fun sendHandshake(deviceId: String) {
+        val me = identityRepository.getUserIdentity().firstOrNull() ?: return
+        val handshake = PeerHandshake(
+            userId = me.userId.value,
+            displayName = me.displayName.value,
+            avatarId = me.avatarId.name,
+            publicKey = me.publicKey
+        )
+        val payload = json.encodeToString(handshake).toByteArray()
+        
+        Log.d(TAG, "Handshake: Sending my profile to $deviceId")
+        try {
+            // Usamos un messageId especial para el handshake
+            val messageId = nextMessageId()
+            val ctx = getOrCreateConnection(deviceId) ?: return
+            
+            ctx.mutex.withLock {
+                val gatt = ensureConnected(ctx) ?: return@withLock
+                
+                val frame = encodeFrame(
+                    type = TYPE_HANDSHAKE,
+                    messageId = messageId,
+                    chunkIndex = 0,
+                    totalChunks = 1,
+                    payload = payload
+                )
 
-        return ctx.mutex.withLock {
-            val gatt = ensureConnected(ctx) ?: return@withLock null
-            val service = gatt.getService(SERVICE_UUID) ?: return@withLock null
-            val characteristic = service.getCharacteristic(IDENTITY_CHAR_UUID) ?: return@withLock null
-            val deferred = CompletableDeferred<String?>()
-            pendingIdentityReads[deviceId] = deferred
-
-            val launched = gatt.readCharacteristic(characteristic)
-            if (!launched) {
-                pendingIdentityReads.remove(deviceId)
-                return@withLock null
+                writeToRx(ctx, gatt, frame)
             }
-
-            try {
-                withTimeout(READ_TIMEOUT_MS) { deferred.await() }
-            } catch (_: TimeoutCancellationException) {
-                pendingIdentityReads.remove(deviceId)
-                null
-            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Handshake: Failed to send to $deviceId", e)
         }
     }
 
